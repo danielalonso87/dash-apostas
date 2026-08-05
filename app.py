@@ -705,11 +705,21 @@ with tab3:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     def _encontrar_config():
-        """Procura em Data/ ou data/ (Linux é sensível a maiúsculas)."""
+        """Procura em Data/ ou data/ usando o nome REAL da pasta no disco."""
         for pasta in ['Data', 'data']:
-            p = os.path.join(BASE_DIR, pasta, 'config_stakes.json')
-            if os.path.exists(p):
-                return p
+            if os.path.isdir(os.path.join(BASE_DIR, pasta)):
+                # Descobre o case real da pasta (evita ambiguidade no Windows)
+                nome_real = pasta
+                try:
+                    nome_real = next(
+                        (d for d in os.listdir(BASE_DIR)
+                         if os.path.isdir(os.path.join(BASE_DIR, d))
+                         and d.lower() == pasta.lower()),
+                        pasta
+                    )
+                except Exception:
+                    pass
+                return os.path.join(BASE_DIR, nome_real, 'config_stakes.json')
         return os.path.join(BASE_DIR, 'data', 'config_stakes.json')
 
     CONFIG_STAKES = _encontrar_config()
@@ -722,7 +732,7 @@ with tab3:
             return {}
 
     def _push_para_github():
-        """Faz commit e push do config_stakes.json para o GitHub."""
+        """Envia o config_stakes.json para o GitHub após salvar."""
         import subprocess
         try:
             rel = os.path.relpath(CONFIG_STAKES, BASE_DIR).replace(os.sep, '/')
@@ -733,9 +743,12 @@ with tab3:
                            cwd=BASE_DIR, capture_output=True, text=True)
             subprocess.run(['git', 'push'], cwd=BASE_DIR,
                            capture_output=True, text=True, check=True)
+
+            st.success("✅ Config enviada para o GitHub!")
+            return True
         except Exception as e:
-            # Não quebra o app se o push falhar (ex: sem internet)
-            print(f"[aviso] Não foi possível enviar ao GitHub: {e}")
+            st.warning(f"⚠️ Não foi possível enviar ao GitHub: {e}")
+            return False
 
     def _salvar_config(cfg):
         try:
@@ -743,8 +756,7 @@ with tab3:
             os.makedirs(pasta, exist_ok=True)
             with open(CONFIG_STAKES, 'w', encoding='utf-8') as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
-            _push_para_github()  # <-- envia para o GitHub após salvar
-            return True
+            return _push_para_github()
         except Exception:
             return False
 
