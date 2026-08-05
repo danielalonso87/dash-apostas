@@ -702,7 +702,17 @@ with tab3:
 
     # ---- Persistência das configurações ----
     import os, json
-    CONFIG_STAKES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Data', 'config_stakes.json')
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    def _encontrar_config():
+        """Procura em Data/ ou data/ (Linux é sensível a maiúsculas)."""
+        for pasta in ['Data', 'data']:
+            p = os.path.join(BASE_DIR, pasta, 'config_stakes.json')
+            if os.path.exists(p):
+                return p
+        return os.path.join(BASE_DIR, 'data', 'config_stakes.json')
+
+    CONFIG_STAKES = _encontrar_config()
 
     def _carregar_config():
         try:
@@ -713,7 +723,8 @@ with tab3:
 
     def _salvar_config(cfg):
         try:
-            os.makedirs(os.path.dirname(CONFIG_STAKES), exist_ok=True)
+            pasta = os.path.dirname(CONFIG_STAKES)
+            os.makedirs(pasta, exist_ok=True)
             with open(CONFIG_STAKES, 'w', encoding='utf-8') as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
             return True
@@ -738,7 +749,11 @@ with tab3:
                             horizontal=True)
 
     if st.button("💾 Salvar configurações", type="secondary"):
-        if _salvar_config({'banca': banca, 'dd': dd_pct, 'tipo_red': tipo_red}):
+        cfg_novo = _carregar_config()  # carrega o que JÁ existe no arquivo
+        cfg_novo['banca'] = banca
+        cfg_novo['dd'] = dd_pct
+        cfg_novo['tipo_red'] = tipo_red
+        if _salvar_config(cfg_novo):
             st.success("Configurações salvas em Data/config_stakes.json")
         else:
             st.warning("Não foi possível salvar. Verifique permissão de escrita na pasta Data.")
@@ -827,11 +842,12 @@ with tab3:
                         )
 
                 if st.button("💾 Salvar stakes manuais", type="secondary"):
+                    cfg_novo = _carregar_config()  # carrega o que JÁ existe no arquivo
                     novos = {}
                     for nome in nomes_metodos:
                         novos[nome] = float(st.session_state.get(f"stake_manual_{nome}", 0.0))
-                    cfg['stakes_manuais'] = novos
-                    if _salvar_config(cfg):
+                    cfg_novo['stakes_manuais'] = novos
+                    if _salvar_config(cfg_novo):
                         st.success("Stakes manuais salvas em Data/config_stakes.json")
                     else:
                         st.warning("Não foi possível salvar.")
