@@ -721,12 +721,29 @@ with tab3:
         except Exception:
             return {}
 
+    def _push_para_github():
+        """Faz commit e push do config_stakes.json para o GitHub."""
+        import subprocess
+        try:
+            rel = os.path.relpath(CONFIG_STAKES, BASE_DIR).replace(os.sep, '/')
+
+            subprocess.run(['git', 'add', rel], cwd=BASE_DIR,
+                           capture_output=True, text=True, check=True)
+            subprocess.run(['git', 'commit', '-m', 'Atualiza config_stakes.json'],
+                           cwd=BASE_DIR, capture_output=True, text=True)
+            subprocess.run(['git', 'push'], cwd=BASE_DIR,
+                           capture_output=True, text=True, check=True)
+        except Exception as e:
+            # Não quebra o app se o push falhar (ex: sem internet)
+            print(f"[aviso] Não foi possível enviar ao GitHub: {e}")
+
     def _salvar_config(cfg):
         try:
             pasta = os.path.dirname(CONFIG_STAKES)
             os.makedirs(pasta, exist_ok=True)
             with open(CONFIG_STAKES, 'w', encoding='utf-8') as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
+            _push_para_github()  # <-- envia para o GitHub após salvar
             return True
         except Exception:
             return False
