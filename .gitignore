@@ -14,4 +14,4 @@ __pycache__/
 # Data/*.xlsx
 
 # Config local
-config_stakes.json
+# config_stakes.json

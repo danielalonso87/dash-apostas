@@ -1,0 +1,14 @@
+{
+  "banca": 6200.0,
+  "dd": 20.0,
+  "tipo_red": "Red Máximo",
+  "stakes_manuais": {
+    "Revalida": 250.0,
+    "Lay Zebra": 400.0,
+    "Projeto +EV (BTTS)": 120.0,
+    "BnR 0x1": 600.0,
+    "Lay CS": 400.0,
+    "Valida 0x1": 400.0,
+    "Masterlist": 400.0
+  }
+}
