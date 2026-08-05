@@ -10,8 +10,8 @@ __pycache__/
 *.pyc
 
 # Dados sensíveis (Excel com suas apostas)
-data/*.xlsx
-Data/*.xlsx
+# data/*.xlsx
+# Data/*.xlsx
 
 # Config local
 config_stakes.json
