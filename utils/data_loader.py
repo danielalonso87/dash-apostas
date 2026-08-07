@@ -2,6 +2,7 @@ import pandas as pd
 import os
 from dotenv import load_dotenv
 import streamlit as st
+import subprocess
 
 load_dotenv()
 
@@ -34,7 +35,29 @@ def load_data():
     if 'Campeonato' in df.columns:
         df['Campeonato'] = df['Campeonato'].fillna('Não informado')
 
+    # Envia o Excel para o GitHub se houver mudança
+    _push_excel_para_github()
+
     return df
+
+def _push_excel_para_github():
+    """Envia o Trading Esportivo.xlsx para o GitHub se houver mudança."""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        rel = os.path.relpath(os.getenv("DATA_PATH", "data/Trading Esportivo.xlsx"),
+                              base_dir).replace(os.sep, '/')
+
+        subprocess.run(['git', 'add', rel], cwd=base_dir,
+                       capture_output=True, text=True, check=True)
+        r = subprocess.run(['git', 'commit', '-m', 'Atualiza Trading Esportivo.xlsx'],
+                           cwd=base_dir, capture_output=True, text=True)
+        # Só faz push se realmente houve commit (evita push desnecessário)
+        if r.returncode == 0:
+            subprocess.run(['git', 'push'], cwd=base_dir,
+                           capture_output=True, text=True, check=True)
+            st.success("✅ Excel enviado para o GitHub!")
+    except Exception as e:
+        st.warning(f"⚠️ Não foi possível enviar o Excel ao GitHub: {e}")
 
 def load_metodos():
     """Carrega a base manual dos métodos (Data/metodos.xlsx)."""
