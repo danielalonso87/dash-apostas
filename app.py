@@ -58,7 +58,7 @@ if 'Data' in df.columns:
     if len(date_range) == 2:
         df_filtered = df[
             (df['Data'] >= pd.Timestamp(date_range[0])) &
-            (df['Data'] <= pd.Timestamp(date_range[1]))
+            (df['Data'] < pd.Timestamp(date_range[1]) + pd.Timedelta(days=1))
         ].copy()
     else:
         df_filtered = df.copy()
@@ -472,11 +472,20 @@ with tab1:
             df_exibicao['Resultado'] = df_exibicao['Resultado_Binario'].map({1: '✅ Green', 0: '❌ Red'})
             df_exibicao = df_exibicao.drop(columns=['Resultado_Binario'])
 
+        # Garante que 'Data' seja datetime e mantenha a hora
+        if 'Data' in df_exibicao.columns:
+            df_exibicao['Data'] = pd.to_datetime(df_exibicao['Data'], errors='coerce')
+            df_exibicao = df_exibicao.sort_values('Data', ascending=False)
+
         st.dataframe(
-            df_exibicao.sort_values('Data', ascending=False) if 'Data' in df_exibicao.columns else df_exibicao,
+            df_exibicao,
             use_container_width=True,
             height=500,
             column_config={
+                "Data": st.column_config.DatetimeColumn(
+                    "Data/Hora",
+                    format="DD/MM/YYYY HH:mm:ss",
+                ),
                 "L/P Líquido": st.column_config.NumberColumn("Lucro/Prejuízo", format="R$ %.2f"),
                 "Stake/Responsabilidade": st.column_config.NumberColumn("Stake", format="R$ %.2f"),
                 "Odd": st.column_config.NumberColumn("Odd", format="%.2f"),

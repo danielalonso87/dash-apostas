@@ -24,6 +24,13 @@ def load_data():
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
 
+    # Combina Data + Horário para ter data e hora completas
+    if 'Horário' in df.columns and 'Data' in df.columns:
+        hora_td = pd.to_timedelta(
+            df['Horário'].dt.time.astype(str), errors='coerce'
+        )
+        df['Data'] = df['Data'] + hora_td.fillna(pd.Timedelta(0))
+
     # Converte colunas numéricas
     num_cols = ['L/P Líquido', 'Comissão%', 'L/P Bruto', 'Odd',
                 'Stake/Responsabilidade', 'ComissãoR$', 'Stakes',
