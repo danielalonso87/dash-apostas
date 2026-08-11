@@ -63,26 +63,66 @@ if 'Data' in df.columns:
     else:
         df_filtered = df.copy()
 
+# ============================================================
+# ⚡ Checkbox: selecionar métodos/submétodos padrão
+# ============================================================
+METODOS_PADRAO = [
+    "BnR", "Lay CS", "Lay Zebra", "Masterlist",
+    "Over Limite Lay Fora", "Projeto +EV", "Valida"
+]
+SUB_PADRAO = [
+    "0x0", "0x1", "0x1 Favorito", "0x1 Zebra",
+    "1x0 Zebra", "1x1", "2x0", "BTTS", 
+    "Casa", "HT/FT Casa", "HT/FT Neutro",
+    "HT/FT Visitante", "Lay Fora", "Neutro", "Visitante"
+]
+
+# Guarda o estado anterior do checkbox para detectar mudanças
+if "prev_sel_padrao" not in st.session_state:
+    st.session_state.prev_sel_padrao = False
+
+selecionar_padrao = st.sidebar.checkbox(
+    "⚡ Selecionar métodos padrão",
+    key="sel_padrao",
+    help="Marca todos os métodos e submétodos padrão de uma vez"
+)
+
+# Se o checkbox mudou, limpa os multiselects para aplicar o novo default
+if selecionar_padrao != st.session_state.prev_sel_padrao:
+    st.session_state.prev_sel_padrao = selecionar_padrao
+    for k in ["metodos_ms", "sub_ms"]:
+        if k in st.session_state:
+            del st.session_state[k]
+
 # Método (multiselect)
 if 'Método' in df.columns:
     metodos = sorted(df_filtered['Método'].dropna().unique())
+    metodos_padrao_validos = [m for m in METODOS_PADRAO if m in metodos]
+
     selected_metodos = st.sidebar.multiselect(
-        "Método", options=metodos, default=[]
+        "Método",
+        options=metodos,
+        default=metodos_padrao_validos if selecionar_padrao else [],
+        key="metodos_ms"
     )
     if selected_metodos:
         df_filtered = df_filtered[df_filtered['Método'].isin(selected_metodos)]
 
 # Filtro de Placar como "Submétodo" (dependente do Método selecionado)
 if 'Placar' in df.columns and 'Método' in df.columns:
-    # Se método(s) foi/foram selecionado(s), mostra só os placares deles
     if selected_metodos:
         placar_disponiveis = df_filtered[df_filtered['Método'].isin(selected_metodos)]['Placar'].dropna().unique()
     else:
         placar_disponiveis = df['Placar'].dropna().unique()
 
     submétodos = sorted(placar_disponiveis)
+    sub_padrao_validos = [s for s in SUB_PADRAO if s in submétodos]
+
     selected_sub = st.sidebar.multiselect(
-        "Submétodo", options=submétodos, default=[]
+        "Submétodo",
+        options=submétodos,
+        default=sub_padrao_validos if selecionar_padrao else [],
+        key="sub_ms"
     )
     if selected_sub:
         df_filtered = df_filtered[df_filtered['Placar'].isin(selected_sub)]
@@ -127,25 +167,7 @@ passo_faixa = st.sidebar.slider(
     help="Ex: 2 = agrupa de 2 em 2 (1–3, 3–5, 5–7...)"
 )
 
-# Mostrar dados brutos na sidebar
-st.sidebar.markdown("---")
-
-    # ... (último filtro)
-
-    # --- COLA: Datas de início dos métodos ---
-st.sidebar.markdown("### 📋 Cola")
-st.sidebar.markdown(
-        """
-| Método | Desde |
-|---|---|
-| 🦓 **Lay Zebra** | `12/03/2026` |
-| 📋 **Masterlist** | `29/06/2026` |
-| ✅ **Valida** | `26/06/2026` |
-| 🎯 **Lay CS** | `06/03/2026` |
-"""
-    )
-
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🧮 Calculadora", "🎯 Stakes"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🧮 Calculadora", "🎯 Stakes", "📋 Critérios"])
 
 with tab1:
     # --- TÍTULO ---
@@ -916,3 +938,79 @@ with tab3:
 - **Stake** = (DD Máximo × Banca) ÷ N ÷ Red escolhido
 - **Stake %** = Stake ÷ Banca × 100
 """)
+
+
+with tab4:
+    st.header("📋 Critérios dos Métodos")
+    st.markdown("*Referência rápida dos critérios de seleção de cada método.*")
+
+    st.markdown("---")
+
+    # ============================================================
+    # BnR 0x1
+    # ============================================================
+    with st.expander("🎯 BnR 0x1", expanded=True):
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            st.markdown("**Odd Máxima**")
+            st.markdown("### <span style='color:#FF9800'>≤ 26</span>", unsafe_allow_html=True)
+            st.caption("Odd máxima permitida para o jogo")
+        with col_c2:
+            st.markdown("**Odd Casa**")
+            st.markdown("### <span style='color:#FF9800'>≤ 1,7</span>", unsafe_allow_html=True)
+            st.caption("Odd do mandante (casa)")
+
+    st.markdown("---")
+
+    # ============================================================
+    # BnR Lay Fora
+    # ============================================================
+    with st.expander("🔄 BnR Lay Fora", expanded=True):
+        col_l1, col_l2 = st.columns(2)
+        with col_l1:
+            st.markdown("**Odd Fora**")
+            st.markdown("### <span style='color:#00C853'>≥ 7</span>", unsafe_allow_html=True)
+            st.caption("Odd do visitante (fora)")
+        with col_l2:
+            st.markdown("**Odd Over 2,5**")
+            st.markdown("### <span style='color:#00C853'>1,33 a 2,67</span>", unsafe_allow_html=True)
+            st.caption("Faixa de odd para Over 2,5 gols")
+
+    st.markdown("---")
+
+    # ============================================================
+    # Over Limite Lay Fora
+    # ============================================================
+    with st.expander("📈 Over Limite Lay Fora", expanded=True):
+        st.markdown("**Odd mínima por placar**")
+        col_o1, col_o2 = st.columns(2)
+        with col_o1:
+            st.markdown("**0x0**")
+            st.markdown("### <span style='color:#2196F3'>≥ 1,35</span>", unsafe_allow_html=True)
+            st.caption("Odd mínima para Over no 0x0")
+            st.markdown("**1x1**")
+            st.markdown("### <span style='color:#2196F3'>≥ 1,30</span>", unsafe_allow_html=True)
+            st.caption("Odd mínima para Over no 1x1")
+        with col_o2:
+            st.markdown("**0x1**")
+            st.markdown("### <span style='color:#2196F3'>≥ 1,26</span>", unsafe_allow_html=True)
+            st.caption("Odd mínima para Over no 0x1")
+            st.markdown("**2x0**")
+            st.markdown("### <span style='color:#2196F3'>≥ 1,26</span>", unsafe_allow_html=True)
+            st.caption("Odd mínima para Over no 2x0")
+
+    st.markdown("---")
+
+    # ============================================================
+    # Datas de início dos métodos
+    # ============================================================
+    st.subheader("🗓️ Datas de Início dos Métodos")
+    st.caption("A partir de quando cada método passou a ser utilizado")
+
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        st.metric("🦓 Lay Zebra", "12/03/2026")
+        st.metric("📋 Masterlist", "29/06/2026")
+    with col_d2:
+        st.metric("✅ Valida", "26/06/2026")
+        st.metric("🎯 Lay CS", "06/03/2026")
