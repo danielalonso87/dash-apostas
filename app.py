@@ -72,7 +72,7 @@ st.markdown("""
 with st.spinner("Carregando base de dados..."):
     df = load_data()
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard", "🧮 Calculadora", "🎯 Stakes", "📋 Critérios", "⚽ Jogos do Dia", "🎯 Métodos"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard", "🧮 Calculadora", "🎯 Stakes", "📋 Critérios", "⚽ Jogos do Dia", "✅ Métodos"])
 
 with tab1:
     # --- TÍTULO + AÇÃO (mesma linha, botão pequeno e discreto) ---
@@ -1063,27 +1063,33 @@ with tab5:
         # Over 2.5: converte para percentual (0.40 -> 40)
         for c in ["Over 2.5", "Over 2.5 Visitante"]:
             dados[c] = dados[c] * 100
-        # Data: converte para DD/MM/AAAA
+        # Data: converte para DD/MM/AAAA (vazio fica vazio)
         if "Data" in dados.columns:
             dados["Data"] = (
                 pd.to_datetime(dados["Data"], errors="coerce", dayfirst=True)
                 .dt.strftime("%d/%m/%Y")
-                .fillna(dados["Data"].astype(str))
             )
-        # Horário: converte para texto "HH:MM" (vem como tipo tempo)
+        # Horário: converte para texto "HH:MM" (vazio fica vazio)
         if "Horário" in dados.columns:
             dados["Horário"] = dados["Horário"].apply(
-                lambda x: x.strftime("%H:%M") if hasattr(x, "strftime") else str(x)
+                lambda x: x.strftime("%H:%M") if hasattr(x, "strftime")
+                else ("" if pd.isna(x) else str(x))
             )
         # País extraído do link da coluna Country (já filtrado no carregamento)
         if "País" in df.columns:
             dados["País"] = df["País"].values
         else:
             dados["País"] = "—"
+
+        # Garante que colunas numéricas sejam float (NaN exibe em branco no editor)
+        for c in num_cols:
+            dados[c] = pd.to_numeric(dados[c], errors="coerce")
+            
+        # Substitui None/NaN por NaN real (evita "None" na tabela)
         # 
         # 3. Limpeza: remove linhas sem info nas colunas 2.5+ (mandante e visitante)
         # 
-        dados = dados.dropna(subset=["Over 2.5", "Over 2.5 Visitante"])
+        # dados = dados.dropna(subset=["Over 2.5", "Over 2.5 Visitante"])
         # 
         # 4. Filtra: ambas as colunas GP >= 3
         # 
@@ -1144,38 +1150,54 @@ with tab5:
             filtra_lay_zebra_novo = st.checkbox("🦓 Lay Zebra", key="filtro_lay_zebra_novo",
                 help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, gols marcados casa ≥ 1.5, gols sofridos casa ≤ 1.3, gols marcados fora ≤ 1.4, gols sofridos fora ≥ 1.4, gols marcados fora ≤ gols sofridos fora. Odd visitante > odd mandante e classif visitante > mandante (0 libera)")
         # 
-        # 6. Filtros numéricos manuais (mín e máx)
+        # 6. Filtros numéricos manuais (mín e máx) + filtro GP
         # 
-        with st.expander("🎛️ Filtros por métricas (mín e máx)", expanded=True):
+        with st.expander("🎛️ Filtros por métricas (mín e máx)", expanded=False):
+            # Checkbox único: remove jogos com times que jogaram menos de 3 partidas
+            filtra_gp = st.checkbox(
+                "⚽ Remover times com menos de 3 jogos (GP)",
+                value=False, key="filtra_gp",
+                help="Remove jogos onde o mandante OU o visitante jogaram menos de 3 partidas"
+            )
+
             def _limites(series, padrao=(0.0, 10.0)):
                 s = pd.to_numeric(series, errors="coerce").dropna()
                 if len(s) == 0:
                     return padrao
                 return (float(s.min()), float(s.max()))
+
             def _min_max_input(label, series, key, step=0.01, format="%.2f"):
                 lo, hi = _limites(series)
-                c1, c2 = st.columns(2)
-                with c1:
-                    v_min = st.number_input(f"{label} mín", min_value=lo, max_value=hi,
-                        value=lo, step=step, format=format, key=f"{key}_min")
-                with c2:
-                    v_max = st.number_input(f"{label} máx", min_value=lo, max_value=hi,
-                        value=hi, step=step, format=format, key=f"{key}_max")
+                v_min = st.number_input(f"{label} mín", min_value=lo, max_value=hi,
+                    value=lo, step=step, format=format, key=f"{key}_min")
+                v_max = st.number_input(f"{label} máx", min_value=lo, max_value=hi,
+                    value=hi, step=step, format=format, key=f"{key}_max")
                 return (v_min, v_max)
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                st.markdown("**🏠 Mandante**")
-                o_m = _min_max_input("Over 2.5 (%)", dados["Over 2.5"], "o_m_pct", step=1.0, format="%.0f")
+
+            st.markdown("**🏠 Mandante**")
+            col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns(5)
+            with col_h1:
+                o_m = _min_max_input("Over 2.5", dados["Over 2.5"], "o_m_pct", step=1.0, format="%.0f")
+            with col_h2:
                 gf_m = _min_max_input("Gols Marcados", dados["Gols Marcados"], "gf_m")
+            with col_h3:
                 ga_m = _min_max_input("Gols Sofridos", dados["Gols Sofridos"], "ga_m")
+            with col_h4:
                 ttg_m = _min_max_input("Total de Gols", dados["Total de Gols"], "ttg_m")
+            with col_h5:
                 class_m = _min_max_input("Classificação", dados["Classif Casa"], "class_m", step=1.0, format="%.0f")
-            with col_f2:
-                st.markdown("**✈️ Visitante**")
-                o_v = _min_max_input("Over 2.5 (%)", dados["Over 2.5 Visitante"], "o_v_pct", step=1.0, format="%.0f")
+
+            st.markdown("**✈️ Visitante**")
+            col_v1, col_v2, col_v3, col_v4, col_v5 = st.columns(5)
+            with col_v1:
+                o_v = _min_max_input("Over 2.5", dados["Over 2.5 Visitante"], "o_v_pct", step=1.0, format="%.0f")
+            with col_v2:
                 gf_v = _min_max_input("Gols Marcados", dados["Gols Marcados Visitante"], "gf_v")
+            with col_v3:
                 ga_v = _min_max_input("Gols Sofridos", dados["Gols Sofridos Visitante"], "ga_v")
+            with col_v4:
                 ttg_v = _min_max_input("Total de Gols", dados["Total de Gols Visitante"], "ttg_v")
+            with col_v5:
                 class_v = _min_max_input("Classificação", dados["Classif Fora"], "class_v", step=1.0, format="%.0f")
         # 
         # 7. Aplica os filtros pré-definidos (se marcados)
@@ -1217,19 +1239,22 @@ with tab5:
             cond_class = ((dados["Classif Fora"] == 0) | (dados["Classif Casa"] == 0) | (dados["Classif Fora"] > dados["Classif Casa"]))
             dados = dados[cond_odd & cond_class]
         # 
-        # 8. Aplica os filtros numéricos manuais
+        # 8. Aplica o filtro de GP (se marcado) + filtros numéricos manuais
         # 
+        if filtra_gp:
+            dados = dados[(dados["GP"] >= 3) & (dados["GP Visitante"] >= 3)]
+        # Filtros manuais: valores vazios (NaN) SEMPRE passam
         dados = dados[
-            (dados["Over 2.5"] >= o_m[0]) & (dados["Over 2.5"] <= o_m[1]) &
-            (dados["Gols Marcados"] >= gf_m[0]) & (dados["Gols Marcados"] <= gf_m[1]) &
-            (dados["Gols Sofridos"] >= ga_m[0]) & (dados["Gols Sofridos"] <= ga_m[1]) &
-            (dados["Total de Gols"] >= ttg_m[0]) & (dados["Total de Gols"] <= ttg_m[1]) &
-            (dados["Over 2.5 Visitante"] >= o_v[0]) & (dados["Over 2.5 Visitante"] <= o_v[1]) &
-            (dados["Gols Marcados Visitante"] >= gf_v[0]) & (dados["Gols Marcados Visitante"] <= gf_v[1]) &
-            (dados["Gols Sofridos Visitante"] >= ga_v[0]) & (dados["Gols Sofridos Visitante"] <= ga_v[1]) &
-            (dados["Total de Gols Visitante"] >= ttg_v[0]) & (dados["Total de Gols Visitante"] <= ttg_v[1]) &
-            (dados["Classif Casa"] >= class_m[0]) & (dados["Classif Casa"] <= class_m[1]) &
-            (dados["Classif Fora"] >= class_v[0]) & (dados["Classif Fora"] <= class_v[1])
+            (dados["Over 2.5"].isna() | ((dados["Over 2.5"] >= o_m[0]) & (dados["Over 2.5"] <= o_m[1]))) &
+            (dados["Gols Marcados"].isna() | ((dados["Gols Marcados"] >= gf_m[0]) & (dados["Gols Marcados"] <= gf_m[1]))) &
+            (dados["Gols Sofridos"].isna() | ((dados["Gols Sofridos"] >= ga_m[0]) & (dados["Gols Sofridos"] <= ga_m[1]))) &
+            (dados["Total de Gols"].isna() | ((dados["Total de Gols"] >= ttg_m[0]) & (dados["Total de Gols"] <= ttg_m[1]))) &
+            (dados["Over 2.5 Visitante"].isna() | ((dados["Over 2.5 Visitante"] >= o_v[0]) & (dados["Over 2.5 Visitante"] <= o_v[1]))) &
+            (dados["Gols Marcados Visitante"].isna() | ((dados["Gols Marcados Visitante"] >= gf_v[0]) & (dados["Gols Marcados Visitante"] <= gf_v[1]))) &
+            (dados["Gols Sofridos Visitante"].isna() | ((dados["Gols Sofridos Visitante"] >= ga_v[0]) & (dados["Gols Sofridos Visitante"] <= ga_v[1]))) &
+            (dados["Total de Gols Visitante"].isna() | ((dados["Total de Gols Visitante"] >= ttg_v[0]) & (dados["Total de Gols Visitante"] <= ttg_v[1]))) &
+            (dados["Classif Casa"].isna() | ((dados["Classif Casa"] >= class_m[0]) & (dados["Classif Casa"] <= class_m[1]))) &
+            (dados["Classif Fora"].isna() | ((dados["Classif Fora"] >= class_v[0]) & (dados["Classif Fora"] <= class_v[1])))
         ]
         # 
         # 9. Feedback visual
@@ -1289,25 +1314,20 @@ with tab5:
         # indicadores ficam travados; só os métodos são editáveis
         colunas_travadas = [c for c in dados.columns if c not in METODOS]
         column_config = {
-            "Data": st.column_config.TextColumn("Data", alignment="center"),
-            "País": st.column_config.TextColumn("País", alignment="center"),
-            "Time Mandante": st.column_config.TextColumn("Time Mandante", alignment="center"),
-            "Horário": st.column_config.TextColumn("Horário", alignment="center"),
-            "Time Visitante": st.column_config.TextColumn("Time Visitante", alignment="center"),
-            "Over 2.5": st.column_config.NumberColumn("Over 2.5", format="%.0f%%", alignment="center"),
-            "Gols Marcados": st.column_config.NumberColumn("Gols Marcados", alignment="center"),
-            "Gols Sofridos": st.column_config.NumberColumn("Gols Sofridos", alignment="center"),
-            "Total de Gols": st.column_config.NumberColumn("Total de Gols", alignment="center"),
-            "Over 2.5 Visitante": st.column_config.NumberColumn("Over 2.5 (Fora)", format="%.0f%%", alignment="center"),
-            "Gols Marcados Visitante": st.column_config.NumberColumn("Gols Marcados (Fora)", alignment="center"),
-            "Gols Sofridos Visitante": st.column_config.NumberColumn("Gols Sofridos (Fora)", alignment="center"),
-            "Total de Gols Visitante": st.column_config.NumberColumn("Total de Gols (Fora)", alignment="center"),
-            "GP": st.column_config.NumberColumn("GP", alignment="center"),
-            "GP Visitante": st.column_config.NumberColumn("GP (Fora)", alignment="center"),
-            "Classif Casa": st.column_config.NumberColumn("Classif Casa", format="%d", alignment="center"),
-            "Classif Fora": st.column_config.NumberColumn("Classif Fora", format="%d", alignment="center"),
-            "Odd Casa": st.column_config.NumberColumn("Odd Casa", format="%.2f", alignment="center"),
-            "Odd Fora": st.column_config.NumberColumn("Odd Fora", format="%.2f", alignment="center"),
+            "Over 2.5": st.column_config.TextColumn("Over 2.5", alignment="center"),
+            "Gols Marcados": st.column_config.TextColumn("Gols Marcados", alignment="center"),
+            "Gols Sofridos": st.column_config.TextColumn("Gols Sofridos", alignment="center"),
+            "Total de Gols": st.column_config.TextColumn("Total de Gols", alignment="center"),
+            "Over 2.5 Visitante": st.column_config.TextColumn("Over 2.5 (Fora)", alignment="center"),
+            "Gols Marcados Visitante": st.column_config.TextColumn("Gols Marcados (Fora)", alignment="center"),
+            "Gols Sofridos Visitante": st.column_config.TextColumn("Gols Sofridos (Fora)", alignment="center"),
+            "Total de Gols Visitante": st.column_config.TextColumn("Total de Gols (Fora)", alignment="center"),
+            "GP": st.column_config.TextColumn("GP", alignment="center"),
+            "GP Visitante": st.column_config.TextColumn("GP (Fora)", alignment="center"),
+            "Classif Casa": st.column_config.TextColumn("Classif Casa", alignment="center"),
+            "Classif Fora": st.column_config.TextColumn("Classif Fora", alignment="center"),
+            "Odd Casa": st.column_config.TextColumn("Odd Casa", alignment="center"),
+            "Odd Fora": st.column_config.TextColumn("Odd Fora", alignment="center"),
         }
         for metodo in METODOS:
             column_config[metodo] = st.column_config.CheckboxColumn(metodo, alignment="center")
@@ -1315,6 +1335,53 @@ with tab5:
         colunas_metodos = [c for c in dados.columns if c not in colunas_travadas]
         for metodo in colunas_metodos:
             dados[metodo] = dados[metodo].fillna(False).astype(bool)
+
+        # ---- LIMPEZA FINAL PARA EXIBIÇÃO (None/NaN/"None" -> célula vazia) ----
+        num_cols_exibidas = num_cols + ["Classif Casa", "Classif Fora", "Odd Casa", "Odd Fora"]
+
+        def _fmt(v, fmt):
+            if v is None:
+                return ""
+            try:
+                if pd.isna(v):
+                    return ""
+            except Exception:
+                pass
+            return fmt.format(v)
+
+        def _vazio(v):
+            if v is None:
+                return ""
+            try:
+                if pd.isna(v):
+                    return ""
+            except Exception:
+                pass
+            if isinstance(v, str) and v.strip().lower() in ("none", "nan", "<na>", "nat"):
+                return ""
+            return v
+
+        # Numéricas -> string formatada (vazio = "")
+        for c in num_cols_exibidas:
+            if c not in dados.columns:
+                continue
+            if c in ("Over 2.5", "Over 2.5 Visitante"):
+                dados[c] = dados[c].map(lambda v: _fmt(v, "{:.0f}%"))
+            elif c in ("GP", "GP Visitante", "Classif Casa", "Classif Fora"):
+                dados[c] = dados[c].map(lambda v: _fmt(v, "{:.0f}"))
+            else:
+                dados[c] = dados[c].map(lambda v: _fmt(v, "{:.2f}"))
+
+        # Texto -> "" para None/NaN/"None" (não toca nas colunas de método/checkbox)
+        for c in dados.columns:
+            if c not in num_cols_exibidas and c not in METODOS:
+                dados[c] = dados[c].map(_vazio)
+
+        # ---- ORDENAÇÃO: dia (ascendente) e depois horário (ascendente) ----
+        dados["_ordem"] = pd.to_datetime(dados["Data"], format="%d/%m/%Y", errors="coerce")
+        dados = dados.sort_values(["_ordem", "Horário"], ascending=[True, True], na_position="last")
+        dados = dados.drop(columns=["_ordem"]).reset_index(drop=True)
+        
         # LIMITA as linhas renderizadas no editor (o componente é o mais pesado)
         MAX_EDITOR = 100
         dados_editor = dados.head(MAX_EDITOR).copy()
@@ -1397,7 +1464,7 @@ with tab5:
         st.error(f"Erro ao carregar a lista de jogos: {e}")
 
 with tab6:
-    st.subheader("🎯 Métodos por Jogo")
+    st.subheader("✅ Métodos por Jogo")
     st.caption("Consulta dos métodos salvos por partida. Acessível de qualquer dispositivo.")
 
     # ---- funções de formatação (o Google Sheets devolve data/hora em formato datetime) ----
