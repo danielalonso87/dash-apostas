@@ -261,8 +261,8 @@ def _fetch_base_extra():
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_metodos_jogos():
-    """Retorna lista de dicts: data, pais, mandante, horario, visitante, metodos. Cache em disco."""
-    return _cache_local("metodos_jogos_v2", _fetch_metodos_jogos, ttl=21600)
+    """Retorna lista de dicts: data, pais, mandante, horario, visitante, metodos. Só cache em memória."""
+    return _fetch_metodos_jogos()
 
 def _fetch_metodos_jogos():
     try:

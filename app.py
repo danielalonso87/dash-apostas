@@ -91,7 +91,7 @@ with tab1:
         "Over Limite Lay Fora", "Projeto +EV", "Valida"
     ]
     SUB_PADRAO = [
-        "0x0", "0x1", "0x1 Favorito", "0x1 Zebra",
+        "0x0", "0x1", "0x1 Favorito", "Lay 0x1 Zebra",
         "1x0 Zebra", "1x1", "2x0", "BTTS",
         "Casa", "HT/FT Casa", "HT/FT Neutro",
         "HT/FT Visitante", "Lay Fora", "Neutro", "Visitante"
@@ -650,9 +650,9 @@ with tab2:
         ], columns=["Critério", "Valor", "Status", "Tipo"]).set_index("Critério"))
 
     # ============================================================
-    # 0x1 ZEBRA
+    # Lay 0x1 ZEBRA
     # ============================================================
-    with st.expander("🦓 0x1 Zebra", expanded=True):
+    with st.expander("🦓 Lay 0x1 Zebra", expanded=True):
         c_odd_vis_maior = odds_mandante < odds_visitante
         c_odd_0x1_ok = odd_0x1 <= 30
         c_over_mand_ok = over25_mandante >= 40
@@ -836,6 +836,8 @@ with tab3:
         cfg_novo['tipo_red'] = tipo_red
         if _salvar_config(cfg_novo):
             st.success("Configurações salvas no Google Sheets")
+            _get_gs.clear()      # ← limpa o cache do GET (a peça que faltava)
+            st.rerun()           # ← recarrega com os valores novos
         else:
             st.warning("Não foi possível salvar. Verifique permissão de escrita na pasta Data.")
 
@@ -1115,6 +1117,9 @@ with tab5:
                     classif_map[r["Casa_N"]] = int(r["Classif Geral Casa"])
                 if isinstance(r["Fora_N"], str) and r["Fora_N"]:
                     classif_map[r["Fora_N"]] = int(r["Classif Geral Fora"])
+                        # DIAGNÓSTICO TEMPORÁRIO — Wolverhampton
+            import sys
+
             odds_map = {}
             for _, r in base.iterrows():
                 chave = (r["Casa_N"], r["Fora_N"])
@@ -1138,7 +1143,7 @@ with tab5:
         st.markdown("### ⚡ Filtros pré-definidos")
         col_p1, col_p2, col_p3, col_p4 = st.columns(4)
         with col_p1:
-            filtra_lay_0x1 = st.checkbox("🦓 0x1 Zebra", key="filtro_lay_0x1",
+            filtra_lay_0x1 = st.checkbox("🦓 Lay 0x1 Zebra", key="filtro_lay_0x1",
                 help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, total de gols ≥ 2.8. Odd visitante > odd mandante e classif visitante > mandante (0 libera)")
         with col_p2:
             filtra_lay_1x0 = st.checkbox("🦓 Lay 1x0 Zebra", key="filtro_lay_1x0",
@@ -1273,7 +1278,7 @@ with tab5:
         ]
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
-            "0x1 Zebra", "Lay 1x0", "Lay 0x1 Favorito", "Lay Zebra",
+            "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", "Lay Zebra",
             "BnR 0x1", "BnR Lay Fora", "Masterlist", "Over Limite Lay Fora",
         ]
         def _norm_data(v):
@@ -1381,7 +1386,7 @@ with tab5:
         dados["_ordem"] = pd.to_datetime(dados["Data"], format="%d/%m/%Y", errors="coerce")
         dados = dados.sort_values(["_ordem", "Horário"], ascending=[True, True], na_position="last")
         dados = dados.drop(columns=["_ordem"]).reset_index(drop=True)
-        
+
         # LIMITA as linhas renderizadas no editor (o componente é o mais pesado)
         MAX_EDITOR = 100
         dados_editor = dados.head(MAX_EDITOR).copy()
@@ -1453,13 +1458,13 @@ with tab5:
             else:
                 st.info("Nenhum jogo com registro na planilha para remover.")
 
-        with st.expander("🔎 Times sem correspondência na base (alimenta o DE-PARA)"):
-            sem_casa = sorted(set(dados.loc[dados["Classif Casa"] == 0, "Time Mandante"]))
-            sem_fora = sorted(set(dados.loc[dados["Classif Fora"] == 0, "Time Visitante"]))
-            st.write("**Mandantes sem dados:**")
-            st.write(", ".join(sem_casa) if sem_casa else "—")
-            st.write("**Visitantes sem dados:**")
-            st.write(", ".join(sem_fora) if sem_fora else "—")
+        # with st.expander("🔎 Times sem correspondência na base (alimenta o DE-PARA)"):
+        #     sem_casa = sorted(set(dados.loc[dados["Classif Casa"] == 0, "Time Mandante"]))
+        #     sem_fora = sorted(set(dados.loc[dados["Classif Fora"] == 0, "Time Visitante"]))
+        #     st.write("**Mandantes sem dados:**")
+        #     st.write(", ".join(sem_casa) if sem_casa else "—")
+        #     st.write("**Visitantes sem dados:**")
+        #     st.write(", ".join(sem_fora) if sem_fora else "—")
     except Exception as e:
         st.error(f"Erro ao carregar a lista de jogos: {e}")
 
