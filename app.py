@@ -3,10 +3,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import math
-from utils.data_loader import load_data
-from utils.metrics import calculate_kpis
-from utils.data_loader import load_data, load_metodos
+from utils.data_loader import _push_excel_para_github, load_data, load_metodos, load_metodos_jogos, load_lista_jogos, load_base_extra, load_depara, _normalizar_nome, salvar_depara, salvar_metodos, _get_gs, _post_gs, deletar_metodos, CACHE_DIR
 from utils.metrics import calculate_kpis, calcular_stakes
+import re
 
 # --- CONFIG DA PÁGINA (PRIMEIRO COMANDO) ---
 st.set_page_config(
@@ -16,164 +15,180 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- ESTILO GLOBAL: fonte menor, margens reduzidas, visual uniforme ---
+st.markdown("""
+<style>
+    /* Fonte base menor (compensa o zoom de 80%) */
+    html, body, [class*="css"], .stApp {
+        font-size: 13px !important;
+    }
+    /* Reduz margens/padding do app */
+    .block-container {
+        padding-top: 1.2rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 1.2rem !important;
+        padding-right: 1.2rem !important;
+        max-width: 100% !important;
+    }
+    /* Reduz espaçamento vertical entre elementos */
+    .stVerticalBlock {
+        gap: 0.4rem !important;
+    }
+    /* Títulos menores e mais compactos */
+    h1 { font-size: 1.5rem !important; margin-bottom: 0.3rem !important; }
+    h2 { font-size: 1.2rem !important; margin-bottom: 0.2rem !important; }
+    h3 { font-size: 1.05rem !important; margin-bottom: 0.2rem !important; }
+    /* Compacta métricas (KPIs) */
+    [data-testid="stMetric"] {
+        padding: 0.4rem !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.3rem !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.8rem !important;
+    }
+    /* Reduz altura das tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.3rem !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 0.3rem 0.6rem !important;
+        font-size: 0.9rem !important;
+    }
+    /* Botões compactos */
+    .stButton > button {
+        font-size: 0.85rem !important;
+        padding: 0.3rem 0.7rem !important;
+    }
+    /* Esconde o "Deploy"/menu padrão para visual limpo */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
 # --- CARREGA DADOS ---
 with st.spinner("Carregando base de dados..."):
     df = load_data()
 
-# --- SIDEBAR: FILTROS ---
-st.sidebar.header("🔍 Filtros")
-
-# Data — seletor de mês rápido + range flexível
-if 'Data' in df.columns:
-    min_date = df['Data'].min().date()
-    max_date = df['Data'].max().date()
-
-    # Seletor de mês/ano para navegação rápida
-    meses_disponiveis = df['Data'].dt.to_period('M').unique()
-    meses_ordenados = sorted(meses_disponiveis, reverse=True)
-    meses_labels = [str(m) for m in meses_ordenados]
-
-    with st.sidebar.expander("📅 Filtro de Data", expanded=True):
-        mes_selecionado = st.selectbox(
-            "Mês (atalho)",
-            options=["Todos"] + meses_labels,
-            index=0
-        )
-
-        if mes_selecionado != "Todos":
-            periodo = pd.Period(mes_selecionado, freq='M')
-            default_start = max(periodo.start_time.date(), min_date)
-            default_end = min(periodo.end_time.date(), max_date)
-        else:
-            default_start = min_date
-            default_end = max_date
-
-        date_range = st.date_input(
-            "Período (ajuste fino)",
-            value=(default_start, default_end),
-            min_value=min_date,
-            max_value=max_date
-        )
-
-    if len(date_range) == 2:
-        df_filtered = df[
-            (df['Data'] >= pd.Timestamp(date_range[0])) &
-            (df['Data'] < pd.Timestamp(date_range[1]) + pd.Timedelta(days=1))
-        ].copy()
-    else:
-        df_filtered = df.copy()
-
-# ============================================================
-# ⚡ Checkbox: selecionar métodos/submétodos padrão
-# ============================================================
-METODOS_PADRAO = [
-    "BnR", "Lay CS", "Lay Zebra", "Masterlist",
-    "Over Limite Lay Fora", "Projeto +EV", "Valida"
-]
-SUB_PADRAO = [
-    "0x0", "0x1", "0x1 Favorito", "0x1 Zebra",
-    "1x0 Zebra", "1x1", "2x0", "BTTS", 
-    "Casa", "HT/FT Casa", "HT/FT Neutro",
-    "HT/FT Visitante", "Lay Fora", "Neutro", "Visitante"
-]
-
-# Guarda o estado anterior do checkbox para detectar mudanças
-if "prev_sel_padrao" not in st.session_state:
-    st.session_state.prev_sel_padrao = False
-
-selecionar_padrao = st.sidebar.checkbox(
-    "⚡ Selecionar métodos padrão",
-    key="sel_padrao",
-    help="Marca todos os métodos e submétodos padrão de uma vez"
-)
-
-# Se o checkbox mudou, limpa os multiselects para aplicar o novo default
-if selecionar_padrao != st.session_state.prev_sel_padrao:
-    st.session_state.prev_sel_padrao = selecionar_padrao
-    for k in ["metodos_ms", "sub_ms"]:
-        if k in st.session_state:
-            del st.session_state[k]
-
-# Método (multiselect)
-if 'Método' in df.columns:
-    metodos = sorted(df_filtered['Método'].dropna().unique())
-    metodos_padrao_validos = [m for m in METODOS_PADRAO if m in metodos]
-
-    selected_metodos = st.sidebar.multiselect(
-        "Método",
-        options=metodos,
-        default=metodos_padrao_validos if selecionar_padrao else [],
-        key="metodos_ms"
-    )
-    if selected_metodos:
-        df_filtered = df_filtered[df_filtered['Método'].isin(selected_metodos)]
-
-# Filtro de Placar como "Submétodo" (dependente do Método selecionado)
-if 'Placar' in df.columns and 'Método' in df.columns:
-    if selected_metodos:
-        placar_disponiveis = df_filtered[df_filtered['Método'].isin(selected_metodos)]['Placar'].dropna().unique()
-    else:
-        placar_disponiveis = df['Placar'].dropna().unique()
-
-    submétodos = sorted(placar_disponiveis)
-    sub_padrao_validos = [s for s in SUB_PADRAO if s in submétodos]
-
-    selected_sub = st.sidebar.multiselect(
-        "Submétodo",
-        options=submétodos,
-        default=sub_padrao_validos if selecionar_padrao else [],
-        key="sub_ms"
-    )
-    if selected_sub:
-        df_filtered = df_filtered[df_filtered['Placar'].isin(selected_sub)]
-
-# Filtro de Odd (inputs manuais com valor mínimo e máximo)
-if 'Odd' in df.columns:
-    odd_min = float(df['Odd'].min())
-    odd_max = float(df['Odd'].max())
-    st.sidebar.markdown("**🎲 Odd**")
-    col_odd1, col_odd2 = st.sidebar.columns(2)
-    with col_odd1:
-        odd_min_input = st.number_input(
-            "Mín",
-            min_value=0.0,
-            value=odd_min,
-            step=0.1,
-            format="%.2f",
-            label_visibility="collapsed"
-        )
-    with col_odd2:
-        odd_max_input = st.number_input(
-            "Máx",
-            min_value=0.0,
-            value=odd_max,
-            step=0.1,
-            format="%.2f",
-            label_visibility="collapsed"
-        )
-    df_filtered = df_filtered[
-        df_filtered['Odd'].isna() | (  # ← mantém linhas sem Odd
-            (df_filtered['Odd'] >= odd_min_input) &
-            (df_filtered['Odd'] <= odd_max_input)
-        )
-    ]
-
-# --- Configuração do gráfico de faixas de odd ---
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📊 Gráfico de Faixas")
-passo_faixa = st.sidebar.slider(
-    "Tamanho da faixa de odd",
-    min_value=1, max_value=10, value=2, step=1,
-    help="Ex: 2 = agrupa de 2 em 2 (1–3, 3–5, 5–7...)"
-)
-
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🧮 Calculadora", "🎯 Stakes", "📋 Critérios"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard", "🧮 Calculadora", "🎯 Stakes", "📋 Critérios", "⚽ Jogos do Dia", "🎯 Métodos"])
 
 with tab1:
     # --- TÍTULO ---
     st.title("📊 Dashboard de Trading Esportivo")
-    st.markdown(f"*{len(df_filtered):,} operações analisadas*")
-            
+
+    # --- AÇÕES (pequenas, discretas, só na tab1) ---
+    col_acao1, col_acao2 = st.columns([1, 1])
+    with col_acao1:
+        if st.button("🗑️ Limpar cache", help="Recarrega os dados do Google Sheets", use_container_width=True):
+            import shutil
+            shutil.rmtree(CACHE_DIR, ignore_errors=True)
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            st.cache_data.clear()
+            st.rerun()
+    with col_acao2:
+        if st.button("📤 Enviar Excel p/ GitHub", help="Sobe a base atualizada para o repositório", use_container_width=True):
+            _push_excel_para_github()
+
+   # ============================================================
+    # Constantes usadas pelo filtro (métodos/submétodos padrão)
+    # ============================================================
+    METODOS_PADRAO = [
+        "BnR", "Lay CS", "Lay Zebra", "Masterlist",
+        "Over Limite Lay Fora", "Projeto +EV", "Valida"
+    ]
+    SUB_PADRAO = [
+        "0x0", "0x1", "0x1 Favorito", "0x1 Zebra",
+        "1x0 Zebra", "1x1", "2x0", "BTTS",
+        "Casa", "HT/FT Casa", "HT/FT Neutro",
+        "HT/FT Visitante", "Lay Fora", "Neutro", "Visitante"
+    ]
+    if "prev_sel_padrao" not in st.session_state:
+        st.session_state.prev_sel_padrao = False
+
+    with st.expander("🔍 Filtros", expanded=False):
+        # ---- Checkbox (definido ANTES dos multiselects, que usam o valor) ----
+        selecionar_padrao = st.checkbox(
+            "⚡ Selecionar métodos padrão", key="sel_padrao",
+            help="Marca todos os métodos e submétodos padrão de uma vez"
+        )
+        if selecionar_padrao != st.session_state.prev_sel_padrao:
+            st.session_state.prev_sel_padrao = selecionar_padrao
+            for k in ["metodos_ms", "sub_ms"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+
+        # ===== LINHA 1: Mês | Período | Método | Submétodo =====
+        c_f1, c_f2, c_f3, c_f4 = st.columns([1, 1.4, 1.6, 1.6])
+        with c_f1:
+            if 'Data' in df.columns:
+                min_date = df['Data'].min().date()
+                max_date = df['Data'].max().date()
+                meses_disponiveis = df['Data'].dt.to_period('M').unique()
+                meses_ordenados = sorted(meses_disponiveis, reverse=True)
+                meses_labels = [str(m) for m in meses_ordenados]
+                mes_selecionado = st.selectbox("Mês", options=["Todos"] + meses_labels, index=0)
+                if mes_selecionado != "Todos":
+                    periodo = pd.Period(mes_selecionado, freq='M')
+                    default_start = max(periodo.start_time.date(), min_date)
+                    default_end = min(periodo.end_time.date(), max_date)
+                else:
+                    default_start = min_date
+                    default_end = max_date
+        with c_f2:
+            if 'Data' in df.columns:
+                date_range = st.date_input("Período", value=(default_start, default_end),
+                                           min_value=min_date, max_value=max_date)
+                if len(date_range) == 2:
+                    df_filtered = df[(df['Data'] >= pd.Timestamp(date_range[0])) &
+                                     (df['Data'] < pd.Timestamp(date_range[1]) + pd.Timedelta(days=1))].copy()
+                else:
+                    df_filtered = df.copy()
+        with c_f3:
+            if 'Método' in df.columns:
+                metodos = sorted(df_filtered['Método'].dropna().unique())
+                metodos_padrao_validos = [m for m in METODOS_PADRAO if m in metodos]
+                selected_metodos = st.multiselect("Método", options=metodos,
+                                                  default=metodos_padrao_validos if selecionar_padrao else [],
+                                                  key="metodos_ms")
+                if selected_metodos:
+                    df_filtered = df_filtered[df_filtered['Método'].isin(selected_metodos)]
+        with c_f4:
+            if 'Placar' in df.columns and 'Método' in df.columns:
+                if selected_metodos:
+                    placar_disponiveis = df_filtered[df_filtered['Método'].isin(selected_metodos)]['Placar'].dropna().unique()
+                else:
+                    placar_disponiveis = df['Placar'].dropna().unique()
+                submétodos = sorted(placar_disponiveis)
+                sub_padrao_validos = [s for s in SUB_PADRAO if s in submétodos]
+                selected_sub = st.multiselect("Submétodo", options=submétodos,
+                                              default=sub_padrao_validos if selecionar_padrao else [],
+                                              key="sub_ms")
+                if selected_sub:
+                    df_filtered = df_filtered[df_filtered['Placar'].isin(selected_sub)]
+
+        # ===== LINHA 2: Odd mín | Odd máx | Faixa odd =====
+        c_g1, c_g2, c_g3 = st.columns([1, 1, 1])
+        with c_g1:
+            if 'Odd' in df.columns:
+                odd_min_input = st.number_input("Odd mín", min_value=0.0,
+                                                value=float(df['Odd'].min()), step=0.1, format="%.2f")
+        with c_g2:
+            if 'Odd' in df.columns:
+                odd_max_input = st.number_input("Odd máx", min_value=0.0,
+                                                value=float(df['Odd'].max()), step=0.1, format="%.2f")
+        with c_g3:
+            passo_faixa = st.slider("Faixa odd", min_value=1, max_value=10, value=2, step=1,
+                                    help="Ex: 2 = agrupa de 2 em 2 (1–3, 3–5, 5–7...)")
+
+        # Aplica o filtro de Odd (após os inputs da linha 2)
+        if 'Odd' in df.columns:
+            df_filtered = df_filtered[df_filtered['Odd'].isna() |
+                                      ((df_filtered['Odd'] >= odd_min_input) &
+                                       (df_filtered['Odd'] <= odd_max_input))]
+
+    st.markdown(f"*{len(df_filtered):,} operações analisadas*")      
     # --- KPIs ---
     kpis = calculate_kpis(df_filtered)
 
@@ -739,7 +754,6 @@ with tab3:
         """Procura em Data/ ou data/ usando o nome REAL da pasta no disco."""
         for pasta in ['Data', 'data']:
             if os.path.isdir(os.path.join(BASE_DIR, pasta)):
-                # Descobre o case real da pasta (evita ambiguidade no Windows)
                 nome_real = pasta
                 try:
                     nome_real = next(
@@ -756,65 +770,80 @@ with tab3:
     CONFIG_STAKES = _encontrar_config()
 
     def _carregar_config():
+        """Lê a configuração da aba Config (Sheets). Fallback: config_stakes.json local."""
+        d = _get_gs("config")
+        if d and d.get("ok"):
+            raw = d.get("config", {})
+            cfg = {"stakes_manuais": {}}
+            for k, v in raw.items():
+                if k.startswith("stake_manual|"):
+                    try:
+                        cfg["stakes_manuais"][k.split("|", 1)[1]] = float(v)
+                    except Exception:
+                        pass
+                else:
+                    cfg[k] = v
+            try:
+                cfg["banca"] = float(cfg.get("banca", 1000.0))
+            except Exception:
+                cfg["banca"] = 1000.0
+            try:
+                cfg["dd"] = float(cfg.get("dd", 10.0))
+            except Exception:
+                cfg["dd"] = 10.0
+            return cfg
         try:
             with open(CONFIG_STAKES, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
             return {}
 
-    def _push_para_github():
-        """Envia o config_stakes.json para o GitHub após salvar."""
-        import subprocess
-        try:
-            rel = os.path.relpath(CONFIG_STAKES, BASE_DIR).replace(os.sep, '/')
-
-            subprocess.run(['git', 'add', rel], cwd=BASE_DIR,
-                           capture_output=True, text=True, check=True)
-            subprocess.run(['git', 'commit', '-m', 'Atualiza config_stakes.json'],
-                           cwd=BASE_DIR, capture_output=True, text=True)
-            subprocess.run(['git', 'push'], cwd=BASE_DIR,
-                           capture_output=True, text=True, check=True)
-
-            st.success("✅ Config enviada para o GitHub!")
-            return True
-        except Exception as e:
-            st.warning(f"⚠️ Não foi possível enviar ao GitHub: {e}")
-            return False
-
     def _salvar_config(cfg):
+        """Grava a configuração na aba Config (Sheets). Fallback: json local."""
+        payload = {"destino": "config", "config": {
+            "banca": cfg.get("banca", 1000.0),
+            "dd": cfg.get("dd", 10.0),
+            "tipo_red": cfg.get("tipo_red", "Red Médio"),
+        }}
+        for nome, valor in (cfg.get("stakes_manuais") or {}).items():
+            payload["config"][f"stake_manual|{nome}"] = valor
+        resp = _post_gs(payload)
+        if resp and resp.get("ok"):
+            return True
         try:
-            pasta = os.path.dirname(CONFIG_STAKES)
-            os.makedirs(pasta, exist_ok=True)
+            os.makedirs(os.path.dirname(CONFIG_STAKES), exist_ok=True)
             with open(CONFIG_STAKES, 'w', encoding='utf-8') as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
-            return _push_para_github()
+            return True
         except Exception:
             return False
 
     cfg = _carregar_config()
 
-    # ---- Entradas ----
-    col_banca, col_dd, col_red = st.columns(3)
-    with col_banca:
-        banca = st.number_input("💰 Banca atual (R$)", min_value=0.0,
-                                value=float(cfg.get('banca', 1000.0)), step=100.0, format="%.2f")
-    with col_dd:
-        dd_pct = st.number_input("📉 Drawdown máximo (%)", min_value=0.0, max_value=100.0,
-                                 value=float(cfg.get('dd', 10.0)), step=0.5, format="%.1f",
-                                 help="Ex: 10 = 10% da banca")
-    with col_red:
-        tipo_red = st.radio("🎯 Stake calculada por:",
-                            ["Red Médio", "Red Máximo"],
-                            index=0 if cfg.get('tipo_red', 'Red Médio') == 'Red Médio' else 1,
-                            horizontal=True)
+    # ---- Entradas (DENTRO de form: só rerun ao clicar em Salvar) ----
+    with st.form("form_config_stakes"):
+        col_banca, col_dd, col_red = st.columns(3)
+        with col_banca:
+            banca = st.number_input("💰 Banca atual (R$)", min_value=0.0,
+                                    value=float(cfg.get('banca', 1000.0)), step=100.0, format="%.2f")
+        with col_dd:
+            dd_pct = st.number_input("📉 Drawdown máximo (%)", min_value=0.0, max_value=100.0,
+                                     value=float(cfg.get('dd', 10.0)), step=0.5, format="%.1f",
+                                     help="Ex: 10 = 10% da banca")
+        with col_red:
+            tipo_red = st.radio("🎯 Stake calculada por:",
+                                ["Red Médio", "Red Máximo"],
+                                index=0 if cfg.get('tipo_red', 'Red Médio') == 'Red Médio' else 1,
+                                horizontal=True)
+        salvar_cfg = st.form_submit_button("💾 Salvar configurações", type="secondary")
 
-    if st.button("💾 Salvar configurações", type="secondary"):
+    if salvar_cfg:
         cfg_novo = _carregar_config()  # carrega o que JÁ existe no arquivo
         cfg_novo['banca'] = banca
         cfg_novo['dd'] = dd_pct
         cfg_novo['tipo_red'] = tipo_red
         if _salvar_config(cfg_novo):
-            st.success("Configurações salvas em Data/config_stakes.json")
+            st.success("Configurações salvas no Google Sheets")
         else:
             st.warning("Não foi possível salvar. Verifique permissão de escrita na pasta Data.")
 
@@ -823,7 +852,7 @@ with tab3:
 
     # ---- Carrega a base de métodos ----
     try:
-        df_metodos = load_metodos()
+        df_metodos = pd.DataFrame(load_metodos())
     except Exception as e:
         st.error(f"Não foi possível carregar metodos.xlsx: {e}")
     else:
@@ -884,31 +913,34 @@ with tab3:
 
             st.dataframe(styler, use_container_width=True, hide_index=True)
 
-            # ---- Stake manual por método (dentro de expander, abaixo da tabela) ----
+            # ---- Stake manual por método (DENTRO de form: só rerun ao Salvar) ----
             with st.expander("🎚️ Stake manual por método"):
-                stakes_manuais = cfg.get('stakes_manuais', {})
                 nomes_metodos = df_stakes['Método'].astype(str).tolist()
+                with st.form("form_stakes_manuais"):
+                    col_stake_inputs = st.columns(3)
+                    for i, nome in enumerate(nomes_metodos):
+                        with col_stake_inputs[i % 3]:
+                            st.number_input(
+                                f"{nome}",
+                                min_value=0.0,
+                                value=float(stakes_manuais.get(nome, 0.0)),
+                                step=1.0,
+                                format="%.2f",
+                                key=f"stake_manual_{nome}",
+                            )
+                    salvar_stakes = st.form_submit_button("💾 Salvar stakes manuais", type="secondary")
 
-                col_stake_inputs = st.columns(3)
-                for i, nome in enumerate(nomes_metodos):
-                    with col_stake_inputs[i % 3]:
-                        st.number_input(
-                            f"{nome}",
-                            min_value=0.0,
-                            value=float(stakes_manuais.get(nome, 0.0)),
-                            step=1.0,
-                            format="%.2f",
-                            key=f"stake_manual_{nome}",
-                        )
-
-                if st.button("💾 Salvar stakes manuais", type="secondary"):
+                if salvar_stakes:
                     cfg_novo = _carregar_config()  # carrega o que JÁ existe no arquivo
                     novos = {}
                     for nome in nomes_metodos:
                         novos[nome] = float(st.session_state.get(f"stake_manual_{nome}", 0.0))
                     cfg_novo['stakes_manuais'] = novos
                     if _salvar_config(cfg_novo):
-                        st.success("Stakes manuais salvas em Data/config_stakes.json")
+                        cfg['stakes_manuais'] = novos   # atualiza o cfg local
+                        st.success("Stakes manuais salvas no Google Sheets")
+                        _get_gs.clear()                 # só invalida o cache do Sheets
+                        st.rerun()                      # recalcula a tabela automaticamente
                     else:
                         st.warning("Não foi possível salvar.")
 
@@ -942,75 +974,492 @@ with tab3:
 
 with tab4:
     st.header("📋 Critérios dos Métodos")
-    st.markdown("*Referência rápida dos critérios de seleção de cada método.*")
+    st.caption("Referência rápida dos critérios de seleção de cada método.")
 
-    st.markdown("---")
+    # Helper para renderizar um critério compacto (valor + descrição)
+    def _criterio(valor, cor, descricao):
+        st.markdown(f"<span style='font-size:1.1rem;font-weight:bold;color:{cor}'>{valor}</span>", unsafe_allow_html=True)
+        st.caption(descricao)
 
     # ============================================================
     # BnR 0x1
     # ============================================================
-    with st.expander("🎯 BnR 0x1", expanded=True):
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            st.markdown("**Odd Máxima**")
-            st.markdown("### <span style='color:#FF9800'>≤ 26</span>", unsafe_allow_html=True)
-            st.caption("Odd máxima permitida para o jogo")
-        with col_c2:
-            st.markdown("**Odd Casa**")
-            st.markdown("### <span style='color:#FF9800'>≤ 1,7</span>", unsafe_allow_html=True)
-            st.caption("Odd do mandante (casa)")
-
-    st.markdown("---")
+    st.markdown("**🎯 BnR 0x1**")
+    c1, c2 = st.columns(2)
+    with c1:
+        _criterio("≤ 26", "#FF9800", "Odd máxima do jogo")
+    with c2:
+        _criterio("≤ 1,7", "#FF9800", "Odd do mandante (casa)")
 
     # ============================================================
     # BnR Lay Fora
     # ============================================================
-    with st.expander("🔄 BnR Lay Fora", expanded=True):
-        col_l1, col_l2 = st.columns(2)
-        with col_l1:
-            st.markdown("**Odd Fora**")
-            st.markdown("### <span style='color:#00C853'>≥ 7</span>", unsafe_allow_html=True)
-            st.caption("Odd do visitante (fora)")
-        with col_l2:
-            st.markdown("**Odd Over 2,5**")
-            st.markdown("### <span style='color:#00C853'>1,33 a 2,67</span>", unsafe_allow_html=True)
-            st.caption("Faixa de odd para Over 2,5 gols")
-
-    st.markdown("---")
+    st.markdown("**🔄 BnR Lay Fora**")
+    c1, c2 = st.columns(2)
+    with c1:
+        _criterio("≥ 7", "#00C853", "Odd do visitante (fora)")
+    with c2:
+        _criterio("1,33 a 2,67", "#00C853", "Faixa de odd para Over 2,5 gols")
 
     # ============================================================
     # Over Limite Lay Fora
     # ============================================================
-    with st.expander("📈 Over Limite Lay Fora", expanded=True):
-        st.markdown("**Odd mínima por placar**")
-        col_o1, col_o2 = st.columns(2)
-        with col_o1:
-            st.markdown("**0x0**")
-            st.markdown("### <span style='color:#2196F3'>≥ 1,35</span>", unsafe_allow_html=True)
-            st.caption("Odd mínima para Over no 0x0")
-            st.markdown("**1x1**")
-            st.markdown("### <span style='color:#2196F3'>≥ 1,30</span>", unsafe_allow_html=True)
-            st.caption("Odd mínima para Over no 1x1")
-        with col_o2:
-            st.markdown("**0x1**")
-            st.markdown("### <span style='color:#2196F3'>≥ 1,26</span>", unsafe_allow_html=True)
-            st.caption("Odd mínima para Over no 0x1")
-            st.markdown("**2x0**")
-            st.markdown("### <span style='color:#2196F3'>≥ 1,26</span>", unsafe_allow_html=True)
-            st.caption("Odd mínima para Over no 2x0")
+    st.markdown("**📈 Over Limite Lay Fora**")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        _criterio("0x0 ≥ 1,35", "#2196F3", "Odd mínima Over")
+    with c2:
+        _criterio("0x1 ≥ 1,26", "#2196F3", "Odd mínima Over")
+    with c3:
+        _criterio("1x1 ≥ 1,30", "#2196F3", "Odd mínima Over")
+    with c4:
+        _criterio("2x0 ≥ 1,26", "#2196F3", "Odd mínima Over")
 
     st.markdown("---")
 
     # ============================================================
     # Datas de início dos métodos
     # ============================================================
-    st.subheader("🗓️ Datas de Início dos Métodos")
-    st.caption("A partir de quando cada método passou a ser utilizado")
+    st.markdown("**🗓️ Datas de Início dos Métodos**")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("🦓 Lay Zebra", "12/03/2026", delta=None)
+    with c2:
+        st.metric("📋 Masterlist", "29/06/2026", delta=None)
+    with c3:
+        st.metric("✅ Valida", "26/06/2026", delta=None)
+    with c4:
+        st.metric("🎯 Lay CS", "06/03/2026", delta=None)
 
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        st.metric("🦓 Lay Zebra", "12/03/2026")
-        st.metric("📋 Masterlist", "29/06/2026")
-    with col_d2:
-        st.metric("✅ Valida", "26/06/2026")
-        st.metric("🎯 Lay CS", "06/03/2026")
+with tab5:
+    st.header("⚽ Jogos do Dia")
+    st.caption("Jogos do mundo todo com filtros por métricas de mandante e visitante")
+    try:
+        df = load_lista_jogos()   # agora CACHEADA
+        # 
+        # 1. Extrai colunas por posição (pula a coluna 0 = número do jogo / link)
+        # 
+        dados = pd.DataFrame({
+            "Over 2.5": df.iloc[:, 2],
+            "Gols Sofridos": df.iloc[:, 4],
+            "Gols Marcados": df.iloc[:, 5],
+            "Total de Gols": df.iloc[:, 6],
+            "GP": df.iloc[:, 8],
+            "Time Mandante": df.iloc[:, 10],
+            "Horário": df.iloc[:, 11],
+            "Time Visitante": df.iloc[:, 12],
+            "GP Visitante": df.iloc[:, 14],
+            "Total de Gols Visitante": df.iloc[:, 16],
+            "Gols Marcados Visitante": df.iloc[:, 17],
+            "Gols Sofridos Visitante": df.iloc[:, 18],
+            "Over 2.5 Visitante": df.iloc[:, 20],
+            "Data": df.iloc[:, 23],   # coluna X do Excel (24ª coluna)
+        })
+        # 
+        # 2. Converte colunas numéricas (vêm como TEXTO com ponto)
+        # 
+        num_cols = [
+            "Over 2.5", "Gols Sofridos", "Gols Marcados", "Total de Gols", "GP",
+            "GP Visitante", "Total de Gols Visitante", "Gols Marcados Visitante",
+            "Gols Sofridos Visitante", "Over 2.5 Visitante"
+        ]
+        for c in num_cols:
+            dados[c] = pd.to_numeric(
+                dados[c].astype(str).str.replace(",", "."),
+                errors="coerce"
+            )
+        # Over 2.5: converte para percentual (0.40 -> 40)
+        for c in ["Over 2.5", "Over 2.5 Visitante"]:
+            dados[c] = dados[c] * 100
+        # Data: converte para DD/MM/AAAA
+        if "Data" in dados.columns:
+            dados["Data"] = (
+                pd.to_datetime(dados["Data"], errors="coerce", dayfirst=True)
+                .dt.strftime("%d/%m/%Y")
+                .fillna(dados["Data"].astype(str))
+            )
+        # Horário: converte para texto "HH:MM" (vem como tipo tempo)
+        if "Horário" in dados.columns:
+            dados["Horário"] = dados["Horário"].apply(
+                lambda x: x.strftime("%H:%M") if hasattr(x, "strftime") else str(x)
+            )
+        # País extraído do link da coluna Country (já filtrado no carregamento)
+        if "País" in df.columns:
+            dados["País"] = df["País"].values
+        else:
+            dados["País"] = "—"
+        # 
+        # 3. Limpeza: remove linhas sem info nas colunas 2.5+ (mandante e visitante)
+        # 
+        dados = dados.dropna(subset=["Over 2.5", "Over 2.5 Visitante"])
+        # 
+        # 4. Filtra: ambas as colunas GP >= 3
+        # 
+        dados = dados[(dados["GP"] >= 3) & (dados["GP Visitante"] >= 3)]
+        # 
+        # 4.5 Enriquecimento: classificação e odds (base extra do Drive) — CACHEADA
+        # 
+        try:
+            base = load_base_extra()
+        except Exception:
+            base = None
+        if base is not None and len(base) > 0:
+            depara = load_depara()   # CACHEADA
+            dados["Casa_N"] = (
+                dados["Time Mandante"].map(_normalizar_nome).map(lambda x: depara.get(x, x))
+            )
+            dados["Fora_N"] = (
+                dados["Time Visitante"].map(_normalizar_nome).map(lambda x: depara.get(x, x))
+            )
+            classif_map = {}
+            for _, r in base.iterrows():
+                if isinstance(r["Casa_N"], str) and r["Casa_N"]:
+                    classif_map[r["Casa_N"]] = int(r["Classif Geral Casa"])
+                if isinstance(r["Fora_N"], str) and r["Fora_N"]:
+                    classif_map[r["Fora_N"]] = int(r["Classif Geral Fora"])
+            odds_map = {}
+            for _, r in base.iterrows():
+                chave = (r["Casa_N"], r["Fora_N"])
+                odds_map.setdefault(chave, (float(r["Odd Abertura Casa"]), float(r["Odd Abertura Visitante"])))
+            dados["Classif Casa"] = dados["Casa_N"].map(classif_map).fillna(0).astype(int)
+            dados["Classif Fora"] = dados["Fora_N"].map(classif_map).fillna(0).astype(int)
+            chaves = list(zip(dados["Casa_N"], dados["Fora_N"]))
+            dados["Odd Casa"] = [odds_map.get(k, (0.0, 0.0))[0] for k in chaves]
+            dados["Odd Fora"] = [odds_map.get(k, (0.0, 0.0))[1] for k in chaves]
+            n_classif = ((dados["Classif Casa"] != 0) | (dados["Classif Fora"] != 0)).sum()
+            n_odds = ((dados["Odd Casa"] != 0) | (dados["Odd Fora"] != 0)).sum()
+            st.caption(f"📊 {n_classif}/{len(dados)} com classificação · {n_odds}/{len(dados)} com odds")
+        else:
+            dados["Classif Casa"] = 0
+            dados["Classif Fora"] = 0
+            dados["Odd Casa"] = 0.0
+            dados["Odd Fora"] = 0.0
+        # 
+        # 5. Filtros pré-definidos (checkboxes)
+        # 
+        st.markdown("### ⚡ Filtros pré-definidos")
+        col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+        with col_p1:
+            filtra_lay_0x1 = st.checkbox("🦓 0x1 Zebra", key="filtro_lay_0x1",
+                help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, total de gols ≥ 2.8. Odd visitante > odd mandante e classif visitante > mandante (0 libera)")
+        with col_p2:
+            filtra_lay_1x0 = st.checkbox("🦓 Lay 1x0 Zebra", key="filtro_lay_1x0",
+                help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, total de gols ≥ 2.8. Odd mandante > odd visitante e classif mandante > visitante (0 libera)")
+        with col_p3:
+            filtra_lay_fav = st.checkbox("⭐ Lay 0x1 Favorito", key="filtro_lay_fav",
+                help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, gols sofridos casa ≥ 1, gols marcados fora ≥ 1.5. Odd mandante > odd visitante e classif mandante > visitante (0 libera)")
+        with col_p4:
+            filtra_lay_zebra_novo = st.checkbox("🦓 Lay Zebra", key="filtro_lay_zebra_novo",
+                help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, gols marcados casa ≥ 1.5, gols sofridos casa ≤ 1.3, gols marcados fora ≤ 1.4, gols sofridos fora ≥ 1.4, gols marcados fora ≤ gols sofridos fora. Odd visitante > odd mandante e classif visitante > mandante (0 libera)")
+        # 
+        # 6. Filtros numéricos manuais (mín e máx)
+        # 
+        with st.expander("🎛️ Filtros por métricas (mín e máx)", expanded=True):
+            def _limites(series, padrao=(0.0, 10.0)):
+                s = pd.to_numeric(series, errors="coerce").dropna()
+                if len(s) == 0:
+                    return padrao
+                return (float(s.min()), float(s.max()))
+            def _min_max_input(label, series, key, step=0.01, format="%.2f"):
+                lo, hi = _limites(series)
+                c1, c2 = st.columns(2)
+                with c1:
+                    v_min = st.number_input(f"{label} mín", min_value=lo, max_value=hi,
+                        value=lo, step=step, format=format, key=f"{key}_min")
+                with c2:
+                    v_max = st.number_input(f"{label} máx", min_value=lo, max_value=hi,
+                        value=hi, step=step, format=format, key=f"{key}_max")
+                return (v_min, v_max)
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                st.markdown("**🏠 Mandante**")
+                o_m = _min_max_input("Over 2.5 (%)", dados["Over 2.5"], "o_m_pct", step=1.0, format="%.0f")
+                gf_m = _min_max_input("Gols Marcados", dados["Gols Marcados"], "gf_m")
+                ga_m = _min_max_input("Gols Sofridos", dados["Gols Sofridos"], "ga_m")
+                ttg_m = _min_max_input("Total de Gols", dados["Total de Gols"], "ttg_m")
+                class_m = _min_max_input("Classificação", dados["Classif Casa"], "class_m", step=1.0, format="%.0f")
+            with col_f2:
+                st.markdown("**✈️ Visitante**")
+                o_v = _min_max_input("Over 2.5 (%)", dados["Over 2.5 Visitante"], "o_v_pct", step=1.0, format="%.0f")
+                gf_v = _min_max_input("Gols Marcados", dados["Gols Marcados Visitante"], "gf_v")
+                ga_v = _min_max_input("Gols Sofridos", dados["Gols Sofridos Visitante"], "ga_v")
+                ttg_v = _min_max_input("Total de Gols", dados["Total de Gols Visitante"], "ttg_v")
+                class_v = _min_max_input("Classificação", dados["Classif Fora"], "class_v", step=1.0, format="%.0f")
+        # 
+        # 7. Aplica os filtros pré-definidos (se marcados)
+        if filtra_lay_0x1:
+            dados = dados[(dados["Over 2.5"] >= 40) & (dados["Over 2.5 Visitante"] >= 40)]
+            media_over = (dados["Over 2.5"] + dados["Over 2.5 Visitante"]) / 2
+            dados = dados[media_over >= 50]
+            dados = dados[(dados["Total de Gols"] >= 2.8) & (dados["Total de Gols Visitante"] >= 2.8)]
+            cond_odd = ((dados["Odd Fora"] == 0) | (dados["Odd Casa"] == 0) | (dados["Odd Fora"] > dados["Odd Casa"]))
+            cond_class = ((dados["Classif Fora"] == 0) | (dados["Classif Casa"] == 0) | (dados["Classif Fora"] > dados["Classif Casa"]))
+            dados = dados[cond_odd & cond_class]
+        if filtra_lay_1x0:
+            dados = dados[(dados["Over 2.5"] >= 40) & (dados["Over 2.5 Visitante"] >= 40)]
+            media_over = (dados["Over 2.5"] + dados["Over 2.5 Visitante"]) / 2
+            dados = dados[media_over >= 50]
+            dados = dados[(dados["Total de Gols"] >= 2.8) & (dados["Total de Gols Visitante"] >= 2.8)]
+            cond_odd = ((dados["Odd Casa"] == 0) | (dados["Odd Fora"] == 0) | (dados["Odd Casa"] > dados["Odd Fora"]))
+            cond_class = ((dados["Classif Casa"] == 0) | (dados["Classif Fora"] == 0) | (dados["Classif Casa"] > dados["Classif Fora"]))
+            dados = dados[cond_odd & cond_class]
+        if filtra_lay_fav:
+            dados = dados[(dados["Over 2.5"] >= 40) & (dados["Over 2.5 Visitante"] >= 40)]
+            media_over = (dados["Over 2.5"] + dados["Over 2.5 Visitante"]) / 2
+            dados = dados[media_over >= 50]
+            dados = dados[dados["Gols Sofridos"] >= 1.0]
+            dados = dados[dados["Gols Marcados Visitante"] >= 1.5]
+            cond_odd = ((dados["Odd Casa"] == 0) | (dados["Odd Fora"] == 0) | (dados["Odd Casa"] > dados["Odd Fora"]))
+            cond_class = ((dados["Classif Casa"] == 0) | (dados["Classif Fora"] == 0) | (dados["Classif Casa"] > dados["Classif Fora"]))
+            dados = dados[cond_odd & cond_class]
+        if filtra_lay_zebra_novo:
+            dados = dados[(dados["Over 2.5"] >= 40) & (dados["Over 2.5 Visitante"] >= 40)]
+            media_over = (dados["Over 2.5"] + dados["Over 2.5 Visitante"]) / 2
+            dados = dados[media_over >= 50]
+            dados = dados[dados["Gols Marcados"] >= 1.5]
+            dados = dados[dados["Gols Sofridos"] <= 1.3]
+            dados = dados[dados["Gols Marcados Visitante"] <= 1.4]
+            dados = dados[dados["Gols Sofridos Visitante"] >= 1.4]
+            dados = dados[dados["Gols Marcados Visitante"] <= dados["Gols Sofridos Visitante"]]
+            cond_odd = ((dados["Odd Fora"] == 0) | (dados["Odd Casa"] == 0) | (dados["Odd Fora"] > dados["Odd Casa"]))
+            cond_class = ((dados["Classif Fora"] == 0) | (dados["Classif Casa"] == 0) | (dados["Classif Fora"] > dados["Classif Casa"]))
+            dados = dados[cond_odd & cond_class]
+        # 
+        # 8. Aplica os filtros numéricos manuais
+        # 
+        dados = dados[
+            (dados["Over 2.5"] >= o_m[0]) & (dados["Over 2.5"] <= o_m[1]) &
+            (dados["Gols Marcados"] >= gf_m[0]) & (dados["Gols Marcados"] <= gf_m[1]) &
+            (dados["Gols Sofridos"] >= ga_m[0]) & (dados["Gols Sofridos"] <= ga_m[1]) &
+            (dados["Total de Gols"] >= ttg_m[0]) & (dados["Total de Gols"] <= ttg_m[1]) &
+            (dados["Over 2.5 Visitante"] >= o_v[0]) & (dados["Over 2.5 Visitante"] <= o_v[1]) &
+            (dados["Gols Marcados Visitante"] >= gf_v[0]) & (dados["Gols Marcados Visitante"] <= gf_v[1]) &
+            (dados["Gols Sofridos Visitante"] >= ga_v[0]) & (dados["Gols Sofridos Visitante"] <= ga_v[1]) &
+            (dados["Total de Gols Visitante"] >= ttg_v[0]) & (dados["Total de Gols Visitante"] <= ttg_v[1]) &
+            (dados["Classif Casa"] >= class_m[0]) & (dados["Classif Casa"] <= class_m[1]) &
+            (dados["Classif Fora"] >= class_v[0]) & (dados["Classif Fora"] <= class_v[1])
+        ]
+        # 
+        # 9. Feedback visual
+        # 
+        st.caption(f"**{len(dados)} jogos** após os filtros")
+        if len(dados) == 0:
+            st.warning("Nenhum jogo encontrado com os filtros atuais. Ajuste os filtros para ampliar a busca.")
+        # 
+        # 10. Tabela + MÉTODOS editáveis
+        # 
+        ordem_colunas = [
+            "Data", "País",
+            "Over 2.5", "Gols Sofridos", "Gols Marcados", "Total de Gols", "GP",  "Classif Casa", "Odd Casa",
+            "Time Mandante", "Horário", "Time Visitante",
+            "Odd Fora", "Classif Fora","GP Visitante", "Total de Gols Visitante", "Gols Sofridos Visitante", "Gols Marcados Visitante", "Over 2.5 Visitante",
+        ]
+        dados = dados[[c for c in ordem_colunas if c in dados.columns]]
+        METODOS = [
+            "0x1 Zebra", "Lay 1x0", "Lay 0x1 Favorito", "Lay Zebra",
+            "BnR 0x1", "BnR Lay Fora", "Masterlist", "Over Limite Lay Fora",
+        ]
+        def _norm_data(v):
+            if not v:
+                return ""
+            s = str(v)
+            s = s.split("T")[0].split(" ")[0]
+            m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+            if m:
+                return f"{m.group(3)}-{m.group(2).zfill(2)}-{m.group(1).zfill(2)}"
+            return s
+        def _chave(linha):
+            return "|".join([
+                _norm_data(linha["Data"]), str(linha["País"]),
+                str(linha["Time Mandante"]), str(linha["Time Visitante"])
+            ]).lower()
+        # carrega os métodos salvos (Google Sheets) — CACHEADO
+        metodos_salvos = load_metodos_jogos()
+        chave_metodos = {}
+        for m in metodos_salvos:
+            k = "|".join([
+                _norm_data(m.get("data", "")), str(m.get("pais", "")),
+                str(m.get("mandante", "")), str(m.get("visitante", ""))
+            ]).lower()
+            chave_metodos[k] = set(p.strip() for p in str(m.get("metodos", "")).split(";") if p.strip())
+        # VETORIZADO: monta a chave de cada linha de uma vez (sem apply por linha)
+        chaves_linha = (
+            dados["Data"].map(_norm_data).astype(str) + "|" +
+            dados["País"].astype(str) + "|" +
+            dados["Time Mandante"].astype(str) + "|" +
+            dados["Time Visitante"].astype(str)
+        ).str.lower()
+        metodos_linha = chaves_linha.map(chave_metodos)   # Series de sets
+        for metodo in METODOS:
+            dados[metodo] = metodos_linha.apply(
+                lambda s: metodo in s if isinstance(s, set) else False
+            )
+        # indicadores ficam travados; só os métodos são editáveis
+        colunas_travadas = [c for c in dados.columns if c not in METODOS]
+        column_config = {
+            "Data": st.column_config.TextColumn("Data", alignment="center"),
+            "País": st.column_config.TextColumn("País", alignment="center"),
+            "Time Mandante": st.column_config.TextColumn("Time Mandante", alignment="center"),
+            "Horário": st.column_config.TextColumn("Horário", alignment="center"),
+            "Time Visitante": st.column_config.TextColumn("Time Visitante", alignment="center"),
+            "Over 2.5": st.column_config.NumberColumn("Over 2.5", format="%.0f%%", alignment="center"),
+            "Gols Marcados": st.column_config.NumberColumn("Gols Marcados", alignment="center"),
+            "Gols Sofridos": st.column_config.NumberColumn("Gols Sofridos", alignment="center"),
+            "Total de Gols": st.column_config.NumberColumn("Total de Gols", alignment="center"),
+            "Over 2.5 Visitante": st.column_config.NumberColumn("Over 2.5 (Fora)", format="%.0f%%", alignment="center"),
+            "Gols Marcados Visitante": st.column_config.NumberColumn("Gols Marcados (Fora)", alignment="center"),
+            "Gols Sofridos Visitante": st.column_config.NumberColumn("Gols Sofridos (Fora)", alignment="center"),
+            "Total de Gols Visitante": st.column_config.NumberColumn("Total de Gols (Fora)", alignment="center"),
+            "GP": st.column_config.NumberColumn("GP", alignment="center"),
+            "GP Visitante": st.column_config.NumberColumn("GP (Fora)", alignment="center"),
+            "Classif Casa": st.column_config.NumberColumn("Classif Casa", format="%d", alignment="center"),
+            "Classif Fora": st.column_config.NumberColumn("Classif Fora", format="%d", alignment="center"),
+            "Odd Casa": st.column_config.NumberColumn("Odd Casa", format="%.2f", alignment="center"),
+            "Odd Fora": st.column_config.NumberColumn("Odd Fora", format="%.2f", alignment="center"),
+        }
+        for metodo in METODOS:
+            column_config[metodo] = st.column_config.CheckboxColumn(metodo, alignment="center")
+        # Garante que todas as colunas de método sejam booleanas (sem NaN)
+        colunas_metodos = [c for c in dados.columns if c not in colunas_travadas]
+        for metodo in colunas_metodos:
+            dados[metodo] = dados[metodo].fillna(False).astype(bool)
+        # LIMITA as linhas renderizadas no editor (o componente é o mais pesado)
+        MAX_EDITOR = 100
+        dados_editor = dados.head(MAX_EDITOR).copy()
+        if len(dados) > MAX_EDITOR:
+            st.caption(f"⚠️ Mostrando os {MAX_EDITOR} primeiros de {len(dados)} jogos. Use os filtros para reduzir a lista.")
+        salvo = False
+        limpar = False
+        if dados_editor.empty:
+            st.info("Nenhum jogo encontrado para os filtros selecionados.")
+        else:
+            with st.form("form_metodos_indicadores"):
+                st.caption("✏️ Marque os métodos direto na tabela. Nada é salvo até clicar em 💾 Salvar seleções.")
+                editado = st.data_editor(
+                    dados_editor,        # ← limitado a MAX_EDITOR linhas
+                    use_container_width=True,
+                    height=500,
+                    hide_index=True,
+                    disabled=colunas_travadas,
+                    column_config=column_config,
+                    key="editor_metodos",
+                )
+                col_botoes = st.columns(2)
+                with col_botoes[0]:
+                    salvo = st.form_submit_button("💾 Salvar seleções", type="primary", use_container_width=True)
+                with col_botoes[1]:
+                    limpar = st.form_submit_button("🧹 Limpar métodos", type="secondary", use_container_width=True)
+        if salvo:
+            linhas = []
+            for _, r in editado.iterrows():
+                marcados = [m for m in METODOS if bool(r.get(m, False))]
+                if marcados or _chave(r) in chave_metodos:
+                    linhas.append({
+                        "data": _norm_data(r["Data"]),
+                        "pais": str(r["País"]),
+                        "mandante": str(r["Time Mandante"]),
+                        "horario": str(r.get("Horário", "")),
+                        "visitante": str(r["Time Visitante"]),
+                        "metodos": "; ".join(marcados),
+                    })
+            if linhas:
+                resp = salvar_metodos(linhas)
+                if resp.get("ok"):
+                    st.success(f"✅ {resp.get('saved', len(linhas))} jogos salvos com sucesso!")
+                    load_metodos_jogos.clear()
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao salvar: {resp}")
+            else:
+                st.info("Nenhum jogo com método marcado.")
+        if limpar:
+            linhas = []
+            for _, r in dados.iterrows():
+                if _chave(r) in chave_metodos:
+                    linhas.append({
+                        "data": _norm_data(r["Data"]),
+                        "pais": str(r["País"]),
+                        "mandante": str(r["Time Mandante"]),
+                        "horario": str(r.get("Horário", "")),
+                        "visitante": str(r["Time Visitante"]),
+                    })
+            if linhas:
+                resp = deletar_metodos(linhas)
+                if resp.get("ok"):
+                    st.success(f"✅ {resp.get('saved', len(linhas))} jogos removidos da planilha!")
+                    load_metodos_jogos.clear()
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao limpar: {resp}")
+            else:
+                st.info("Nenhum jogo com registro na planilha para remover.")
+
+        with st.expander("🔎 Times sem correspondência na base (alimenta o DE-PARA)"):
+            sem_casa = sorted(set(dados.loc[dados["Classif Casa"] == 0, "Time Mandante"]))
+            sem_fora = sorted(set(dados.loc[dados["Classif Fora"] == 0, "Time Visitante"]))
+            st.write("**Mandantes sem dados:**")
+            st.write(", ".join(sem_casa) if sem_casa else "—")
+            st.write("**Visitantes sem dados:**")
+            st.write(", ".join(sem_fora) if sem_fora else "—")
+    except Exception as e:
+        st.error(f"Erro ao carregar a lista de jogos: {e}")
+
+with tab6:
+    st.subheader("🎯 Métodos por Jogo")
+    st.caption("Consulta dos métodos salvos por partida. Acessível de qualquer dispositivo.")
+
+    # ---- funções de formatação (o Google Sheets devolve data/hora em formato datetime) ----
+    def _fmt_data(v):
+        if not v:
+            return ""
+        s = str(v)
+        # se veio como datetime do Sheets, extrai só a parte da data (YYYY-MM-DD)
+        if "T" in s:
+            return s.split("T")[0]
+        return s
+
+    def _fmt_horario(v):
+        if not v:
+            return ""
+        s = str(v)
+        # se veio como datetime do Sheets, extrai só HH:MM
+        if "T" in s:
+            return s.split("T")[1][:5]
+        return s
+
+    # ---- carrega os métodos salvos ----
+    metodos_salvos = load_metodos_jogos()
+
+    if metodos_salvos:
+        df_consulta = pd.DataFrame(metodos_salvos)
+
+        # renomeia para nomes amigáveis
+        df_consulta = df_consulta.rename(columns={
+            "data": "Data",
+            "pais": "País",
+            "mandante": "Time Mandante",
+            "horario": "Horário",
+            "visitante": "Time Visitante",
+            "metodos": "Métodos",
+        })
+
+        # formata data e horário (remove o lixo do datetime do Sheets)
+        if "Data" in df_consulta.columns:
+            df_consulta["Data"] = df_consulta["Data"].map(_fmt_data)
+        if "Horário" in df_consulta.columns:
+            df_consulta["Horário"] = df_consulta["Horário"].map(_fmt_horario)
+
+        # mantém só as colunas relevantes e ordena por data
+        ordem = ["Data", "País", "Time Mandante", "Horário", "Time Visitante", "Métodos"]
+        df_consulta = df_consulta[[c for c in ordem if c in df_consulta.columns]]
+        df_consulta = df_consulta.sort_values("Data").reset_index(drop=True)
+
+        st.dataframe(
+            df_consulta,
+            hide_index=True,
+            use_container_width=True,
+            height=520,
+        )
+        st.caption(f"📋 {len(df_consulta)} partidas classificadas")
+    else:
+        st.info("Nenhum método salvo ainda. Marque os métodos na tabela principal e clique em 💾 Salvar seleções.")

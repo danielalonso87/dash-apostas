@@ -1,7 +1,9 @@
 import pandas as pd
 import math
 import unicodedata
+import streamlit as st
 
+@st.cache_data(show_spinner=False)
 def calculate_kpis(df):
     """Calcula indicadores principais para trading esportivo"""
     total_apostas = len(df)
