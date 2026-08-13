@@ -1155,15 +1155,28 @@ with tab5:
             filtra_lay_zebra_novo = st.checkbox("🦓 Lay Zebra", key="filtro_lay_zebra_novo",
                 help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, gols marcados casa ≥ 1.5, gols sofridos casa ≤ 1.3, gols marcados fora ≤ 1.4, gols sofridos fora ≥ 1.4, gols marcados fora ≤ gols sofridos fora. Odd visitante > odd mandante e classif visitante > mandante (0 libera)")
         # 
+        
         # 6. Filtros numéricos manuais (mín e máx) + filtro GP
-        # 
         with st.expander("🎛️ Filtros por métricas (mín e máx)", expanded=False):
-            # Checkbox único: remove jogos com times que jogaram menos de 3 partidas
-            filtra_gp = st.checkbox(
-                "⚽ Remover times com menos de 3 jogos (GP)",
-                value=False, key="filtra_gp",
-                help="Remove jogos onde o mandante OU o visitante jogaram menos de 3 partidas"
-            )
+            # Linha 1: filtro de DATA (dropdown) + checkbox GP
+            col_top1, col_top2 = st.columns([2, 3])
+            with col_top1:
+                datas_series = dados["Data"].dropna().astype(str)
+                datas_disponiveis = sorted(
+                    datas_series.unique().tolist(),
+                    key=lambda d: pd.to_datetime(d, format="%d/%m/%Y", errors="coerce")
+                )
+                data_filtro = st.selectbox(
+                    "📅 Filtrar por data",
+                    options=["Todas"] + datas_disponiveis,
+                    key="filtro_data",
+                )
+            with col_top2:
+                filtra_gp = st.checkbox(
+                    "⚽ Remover times com menos de 3 jogos (GP)",
+                    value=False, key="filtra_gp",
+                    help="Remove jogos onde o mandante OU o visitante jogaram menos de 3 partidas"
+                )
 
             def _limites(series, padrao=(0.0, 10.0)):
                 s = pd.to_numeric(series, errors="coerce").dropna()
@@ -1180,7 +1193,7 @@ with tab5:
                 return (v_min, v_max)
 
             st.markdown("**🏠 Mandante**")
-            col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns(5)
+            col_h1, col_h2, col_h3, col_h4, col_h5, col_h6 = st.columns(6)
             with col_h1:
                 o_m = _min_max_input("Over 2.5", dados["Over 2.5"], "o_m_pct", step=1.0, format="%.0f")
             with col_h2:
@@ -1191,9 +1204,11 @@ with tab5:
                 ttg_m = _min_max_input("Total de Gols", dados["Total de Gols"], "ttg_m")
             with col_h5:
                 class_m = _min_max_input("Classificação", dados["Classif Casa"], "class_m", step=1.0, format="%.0f")
+            with col_h6:
+                odd_m = _min_max_input("Odd", dados["Odd Casa"], "odd_m")
 
             st.markdown("**✈️ Visitante**")
-            col_v1, col_v2, col_v3, col_v4, col_v5 = st.columns(5)
+            col_v1, col_v2, col_v3, col_v4, col_v5, col_v6 = st.columns(6)
             with col_v1:
                 o_v = _min_max_input("Over 2.5", dados["Over 2.5 Visitante"], "o_v_pct", step=1.0, format="%.0f")
             with col_v2:
@@ -1204,6 +1219,8 @@ with tab5:
                 ttg_v = _min_max_input("Total de Gols", dados["Total de Gols Visitante"], "ttg_v")
             with col_v5:
                 class_v = _min_max_input("Classificação", dados["Classif Fora"], "class_v", step=1.0, format="%.0f")
+            with col_v6:
+                odd_v = _min_max_input("Odd", dados["Odd Fora"], "odd_v")
         # 
         # 7. Aplica os filtros pré-definidos (se marcados)
         if filtra_lay_0x1:
@@ -1245,7 +1262,10 @@ with tab5:
             dados = dados[cond_odd & cond_class]
         # 
         # 8. Aplica o filtro de GP (se marcado) + filtros numéricos manuais
-        # 
+        #
+        # Filtro de data (dropdown) — "Todas" = sem filtro
+        if data_filtro != "Todas":
+            dados = dados[dados["Data"].astype(str) == data_filtro]
         if filtra_gp:
             dados = dados[(dados["GP"] >= 3) & (dados["GP Visitante"] >= 3)]
         # Filtros manuais: valores vazios (NaN) SEMPRE passam
@@ -1259,7 +1279,9 @@ with tab5:
             (dados["Gols Sofridos Visitante"].isna() | ((dados["Gols Sofridos Visitante"] >= ga_v[0]) & (dados["Gols Sofridos Visitante"] <= ga_v[1]))) &
             (dados["Total de Gols Visitante"].isna() | ((dados["Total de Gols Visitante"] >= ttg_v[0]) & (dados["Total de Gols Visitante"] <= ttg_v[1]))) &
             (dados["Classif Casa"].isna() | ((dados["Classif Casa"] >= class_m[0]) & (dados["Classif Casa"] <= class_m[1]))) &
-            (dados["Classif Fora"].isna() | ((dados["Classif Fora"] >= class_v[0]) & (dados["Classif Fora"] <= class_v[1])))
+            (dados["Classif Fora"].isna() | ((dados["Classif Fora"] >= class_v[0]) & (dados["Classif Fora"] <= class_v[1]))) &
+            (dados["Odd Casa"].isna() | ((dados["Odd Casa"] >= odd_m[0]) & (dados["Odd Casa"] <= odd_m[1]))) &
+            (dados["Odd Fora"].isna() | ((dados["Odd Fora"] >= odd_v[0]) & (dados["Odd Fora"] <= odd_v[1])))
         ]
         # 
         # 9. Feedback visual
@@ -1472,23 +1494,39 @@ with tab6:
     st.subheader("✅ Métodos por Jogo")
     st.caption("Consulta dos métodos salvos por partida. Acessível de qualquer dispositivo.")
 
-    # ---- funções de formatação (o Google Sheets devolve data/hora em formato datetime) ----
+    # ---- formatação robusta de data e horário ----
     def _fmt_data(v):
-        if not v:
+        if v is None:
             return ""
-        s = str(v)
-        # se veio como datetime do Sheets, extrai só a parte da data (YYYY-MM-DD)
-        if "T" in s:
+        s = str(v).strip()
+        if not s:
+            return ""
+        if "T" in s:                      # datetime ISO -> YYYY-MM-DD
             return s.split("T")[0]
         return s
 
     def _fmt_horario(v):
-        if not v:
+        if v is None:
             return ""
-        s = str(v)
-        # se veio como datetime do Sheets, extrai só HH:MM
-        if "T" in s:
+        s = str(v).strip()
+        if not s:
+            return ""
+        if "T" in s:                      # datetime ISO -> HH:MM
             return s.split("T")[1][:5]
+        if ":" in s:                      # já é HH:MM:SS ou HH:MM
+            return s[:5]
+        # número de Excel (fração do dia) -> HH:MM
+        try:
+            frac = float(s)
+            if 0 <= frac < 1:
+                horas = int(frac * 24)
+                minutos = int(round((frac * 24 - horas) * 60))
+                if minutos == 60:
+                    horas += 1
+                    minutos = 0
+                return f"{horas:02d}:{minutos:02d}"
+        except ValueError:
+            pass
         return s
 
     # ---- carrega os métodos salvos ----
@@ -1507,16 +1545,23 @@ with tab6:
             "metodos": "Métodos",
         })
 
-        # formata data e horário (remove o lixo do datetime do Sheets)
+        # formata data e horário
         if "Data" in df_consulta.columns:
             df_consulta["Data"] = df_consulta["Data"].map(_fmt_data)
         if "Horário" in df_consulta.columns:
             df_consulta["Horário"] = df_consulta["Horário"].map(_fmt_horario)
 
-        # mantém só as colunas relevantes e ordena por data
-        ordem = ["Data", "País", "Time Mandante", "Horário", "Time Visitante", "Métodos"]
+        # ---- ORDEM DAS COLUNAS: data, horario, pais, mandante, visitante, metodos ----
+        ordem = ["Data", "Horário", "País", "Time Mandante", "Time Visitante", "Métodos"]
         df_consulta = df_consulta[[c for c in ordem if c in df_consulta.columns]]
-        df_consulta = df_consulta.sort_values("Data").reset_index(drop=True)
+
+        # ---- ORDENAÇÃO: data (asc) e depois horário (asc) ----
+        df_consulta["_ordem_data"] = pd.to_datetime(
+            df_consulta["Data"], format="%Y-%m-%d", errors="coerce"
+        )
+        df_consulta = df_consulta.sort_values(
+            ["_ordem_data", "Horário"], ascending=[True, True], na_position="last"
+        ).drop(columns=["_ordem_data"]).reset_index(drop=True)
 
         st.dataframe(
             df_consulta,
