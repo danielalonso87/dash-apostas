@@ -75,20 +75,12 @@ with st.spinner("Carregando base de dados..."):
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard", "🧮 Calculadora", "🎯 Stakes", "📋 Critérios", "⚽ Jogos do Dia", "🎯 Métodos"])
 
 with tab1:
-    # --- TÍTULO ---
-    st.title("📊 Dashboard de Trading Esportivo")
-
-    # --- AÇÕES (pequenas, discretas, só na tab1) ---
-    col_acao1, col_acao2 = st.columns([1, 1])
-    with col_acao1:
-        if st.button("🗑️ Limpar cache", help="Recarrega os dados do Google Sheets", use_container_width=True):
-            import shutil
-            shutil.rmtree(CACHE_DIR, ignore_errors=True)
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            st.cache_data.clear()
-            st.rerun()
-    with col_acao2:
-        if st.button("📤 Enviar Excel p/ GitHub", help="Sobe a base atualizada para o repositório", use_container_width=True):
+    # --- TÍTULO + AÇÃO (mesma linha, botão pequeno e discreto) ---
+    col_titulo, col_acao = st.columns([7, 1], vertical_alignment="center")
+    with col_titulo:
+        st.title("📊 Dashboard de Trading Esportivo")
+    with col_acao:
+        if st.button("📤 GitHub", help="Sobe a base atualizada para o repositório", key="btn_envia_excel"):
             _push_excel_para_github()
 
    # ============================================================
@@ -1095,7 +1087,7 @@ with tab5:
         # 
         # 4. Filtra: ambas as colunas GP >= 3
         # 
-        dados = dados[(dados["GP"] >= 3) & (dados["GP Visitante"] >= 3)]
+        # dados = dados[(dados["GP"] >= 3) & (dados["GP Visitante"] >= 3)]
         # 
         # 4.5 Enriquecimento: classificação e odds (base extra do Drive) — CACHEADA
         # 
