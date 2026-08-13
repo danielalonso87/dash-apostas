@@ -1493,7 +1493,84 @@ with tab5:
 with tab6:
     st.subheader("✅ Métodos por Jogo")
     st.caption("Consulta dos métodos salvos por partida. Acessível de qualquer dispositivo.")
+        # ============================================================
+    # ➕ ADICIONAR JOGO MANUALMENTE (formulário único, acumula até salvar)
+    # ============================================================
+    METODOS_TAB6 = [
+        "Lay 0x1 Zebra", "Lay 1x0", "Lay 0x1 Favorito", "Lay Zebra",
+        "BnR 0x1", "BnR Lay Fora", "Masterlist", "Over Limite Lay Fora",
+    ]
 
+    # estado acumulado (sobrevive aos reruns do Streamlit)
+    if "manuais_pendentes" not in st.session_state:
+        st.session_state["manuais_pendentes"] = []
+
+    with st.expander("➕ Adicionar jogo manualmente", expanded=False):
+        st.caption("Preencha uma partida por vez e clique em Adicionar. As partidas acumulam até você salvar na planilha.")
+
+        with st.form("form_manual_tab6"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                data_manual = st.date_input("📅 Data", value=None)
+            with c2:
+                hora_manual = st.time_input("🕐 Horário", value=None)
+            with c3:
+                pais_manual = st.text_input("🌍 País")
+
+            c4, c5 = st.columns(2)
+            with c4:
+                mand_manual = st.text_input("🏠 Mandante")
+            with c5:
+                visit_manual = st.text_input("✈️ Visitante")
+
+            metodos_manual = st.multiselect(
+                "🎯 Métodos",
+                options=METODOS_TAB6,
+                help="Selecione um ou mais métodos (os mesmos da tabela Jogos do Dia).",
+            )
+
+            col_add, col_salvar = st.columns(2)
+            with col_add:
+                adicionar = st.form_submit_button("➕ Adicionar à lista", use_container_width=True)
+            with col_salvar:
+                salvar_manual = st.form_submit_button("💾 Salvar na planilha", type="primary", use_container_width=True)
+
+        # ---- Adicionar: acumula a linha preenchida ----
+        if adicionar:
+            if not mand_manual.strip() or not visit_manual.strip():
+                st.warning("Preencha ao menos Mandante e Visitante antes de adicionar.")
+            else:
+                st.session_state["manuais_pendentes"].append({
+                    "data": data_manual.strftime("%d/%m/%Y") if data_manual else "",
+                    "pais": pais_manual.strip(),
+                    "mandante": mand_manual.strip(),
+                    "horario": hora_manual.strftime("%H:%M") if hora_manual else "",
+                    "visitante": visit_manual.strip(),
+                    "metodos": "; ".join(metodos_manual),
+                })
+                st.success(f"✅ Adicionado: {mand_manual.strip()} x {visit_manual.strip()}")
+
+        # ---- Mostra a lista acumulada ----
+        pendentes = st.session_state["manuais_pendentes"]
+        if pendentes:
+            st.markdown("**📋 Partidas aguardando salvamento:**")
+            for i, p in enumerate(pendentes, 1):
+                st.write(f"{i}. {p['data']} {p['horario']} — {p['mandante']} x {p['visitante']} ({p['pais']}) — **{p['metodos'] or 'sem métodos'}**")
+
+        # ---- Salvar: grava na planilha e atualiza a tabela ----
+        if salvar_manual:
+            if not pendentes:
+                st.info("Nenhuma partida adicionada para salvar.")
+            else:
+                resp = salvar_metodos(pendentes)
+                if resp.get("ok"):
+                    st.success(f"✅ {len(pendentes)} partida(s) salva(s) na planilha!")
+                    st.session_state["manuais_pendentes"] = []   # limpa o acumulado
+                    load_metodos_jogos.clear()                    # limpa o cache
+                    st.rerun()                                    # recarrega a tabela na hora
+                else:
+                    st.error(f"Erro ao salvar: {resp}")
+                    
     # ---- formatação robusta de data e horário ----
     def _fmt_data(v):
         if v is None:
