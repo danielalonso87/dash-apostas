@@ -100,18 +100,22 @@ with tab1:
     ]
     if "prev_sel_padrao" not in st.session_state:
         st.session_state.prev_sel_padrao = False
-
     with st.expander("🔍 Filtros", expanded=False):
         # ---- Checkbox (definido ANTES dos multiselects, que usam o valor) ----
         selecionar_padrao = st.checkbox(
             "⚡ Selecionar métodos padrão", key="sel_padrao",
             help="Marca todos os métodos e submétodos padrão de uma vez"
         )
+        # Aplica o efeito SOMENTE quando o estado do checkbox muda:
+        # - ao marcar   -> sinaliza os multiselects para selecionarem os padrão
+        # - ao desmarcar -> esvazia os multiselects e desfaz o filtro
         if selecionar_padrao != st.session_state.prev_sel_padrao:
             st.session_state.prev_sel_padrao = selecionar_padrao
-            for k in ["metodos_ms", "sub_ms"]:
-                if k in st.session_state:
-                    del st.session_state[k]
+            if selecionar_padrao:
+                st.session_state["_aplicar_padrao"] = True
+            else:
+                st.session_state["metodos_ms"] = []
+                st.session_state["sub_ms"] = []
 
         # ===== LINHA 1: Mês | Período | Método | Submétodo =====
         c_f1, c_f2, c_f3, c_f4 = st.columns([1, 1.4, 1.6, 1.6])
@@ -143,9 +147,11 @@ with tab1:
             if 'Método' in df.columns:
                 metodos = sorted(df_filtered['Método'].dropna().unique())
                 metodos_padrao_validos = [m for m in METODOS_PADRAO if m in metodos]
-                selected_metodos = st.multiselect("Método", options=metodos,
-                                                  default=metodos_padrao_validos if selecionar_padrao else [],
-                                                  key="metodos_ms")
+                # Se o checkbox foi marcado nesta execução, seleciona os métodos padrão
+                if st.session_state.get("_aplicar_padrao"):
+                    st.session_state["metodos_ms"] = metodos_padrao_validos
+                selected_metodos = st.multiselect("Método", options=metodos, key="metodos_ms")
+                # APLICA O FILTRO pelos métodos selecionados (linha essencial)
                 if selected_metodos:
                     df_filtered = df_filtered[df_filtered['Método'].isin(selected_metodos)]
         with c_f4:
@@ -156,11 +162,20 @@ with tab1:
                     placar_disponiveis = df['Placar'].dropna().unique()
                 submétodos = sorted(placar_disponiveis)
                 sub_padrao_validos = [s for s in SUB_PADRAO if s in submétodos]
-                selected_sub = st.multiselect("Submétodo", options=submétodos,
-                                              default=sub_padrao_validos if selecionar_padrao else [],
-                                              key="sub_ms")
+                # Se o checkbox foi marcado nesta execução, seleciona os submétodos padrão
+                if st.session_state.get("_aplicar_padrao"):
+                    st.session_state["sub_ms"] = sub_padrao_validos
+                    st.session_state.pop("_aplicar_padrao", None)   # consome o sinal (só aplica 1x)
+                selected_sub = st.multiselect("Submétodo", options=submétodos, key="sub_ms")
+                # APLICA O FILTRO pelos submétodos selecionados (linha essencial)
+                # Métodos SEM submétodo (ex.: "Lay Fora") têm Placar vazio/NaN e
+                # precisam continuar sendo contabilizados — por isso são mantidos.
                 if selected_sub:
-                    df_filtered = df_filtered[df_filtered['Placar'].isin(selected_sub)]
+                    df_filtered = df_filtered[
+                        df_filtered['Placar'].isna() |                          # sem submétodo
+                        (df_filtered['Placar'].astype(str).str.strip() == "") | # vazio
+                        df_filtered['Placar'].isin(selected_sub)                # submétodo selecionado
+                    ]
 
         # ===== LINHA 2: Odd mín | Odd máx | Faixa odd =====
         c_g1, c_g2, c_g3 = st.columns([1, 1, 1])
