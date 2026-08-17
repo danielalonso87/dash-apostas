@@ -6,6 +6,8 @@ import math
 from utils.data_loader import _push_excel_para_github, load_data, load_metodos, load_metodos_jogos, load_lista_jogos, load_base_extra, load_depara, _normalizar_nome, salvar_depara, salvar_metodos, _get_gs, _post_gs, deletar_metodos, CACHE_DIR
 from utils.metrics import calculate_kpis, calcular_stakes
 import re
+import datetime as _dt
+
 
 # --- CONFIG DA PÁGINA (PRIMEIRO COMANDO) ---
 st.set_page_config(
@@ -87,14 +89,14 @@ with tab1:
     # Constantes usadas pelo filtro (métodos/submétodos padrão)
     # ============================================================
     METODOS_PADRAO = [
-        "BnR", "Lay CS", "Lay Zebra", "Masterlist",
+        "Lay CS", "Lay Fora", "Lay Super Zebra",  "Masterlist",
         "Over Limite Lay Fora", "Projeto +EV", "Valida"
     ]
     SUB_PADRAO = [
-        "0x0", "0x1", "0x1 Favorito", "Lay 0x1 Zebra",
+        "0x0", "0x1", "0x1 Favorito", "0x1 Zebra",
         "1x0 Zebra", "1x1", "2x0", "BTTS",
         "Casa", "HT/FT Casa", "HT/FT Neutro",
-        "HT/FT Visitante", "Lay Fora", "Neutro", "Visitante"
+        "HT/FT Visitante", "Neutro", "Visitante"
     ]
     if "prev_sel_padrao" not in st.session_state:
         st.session_state.prev_sel_padrao = False
@@ -1028,6 +1030,15 @@ with tab4:
 with tab5:
     st.header("⚽ Jogos do Dia")
     st.caption("Jogos do mundo todo com filtros por métricas de mandante e visitante")
+    # Contador de reset: ao incrementar, os filtros numéricos ganham chaves NOVAS
+    # e são recriados do zero com os valores originais (mín/máx da base completa).
+    st.session_state.setdefault("_filtro_reset_n", 0)
+
+    # Aplica o reset dos filtros NÃO-numéricos (se o botão foi clicado na execução anterior)
+    if st.session_state.pop("_reset_filtros", False):
+        for k in ["filtro_lay_0x1", "filtro_lay_1x0", "filtro_lay_fav", "filtro_lay_zebra_novo",
+                  "filtro_data", "filtro_paises", "filtra_gp"]:
+            st.session_state.pop(k, None)
     try:
         df = load_lista_jogos()   # agora CACHEADA
         # 
@@ -1071,12 +1082,41 @@ with tab5:
                 pd.to_datetime(dados["Data"], errors="coerce", dayfirst=True)
                 .dt.strftime("%d/%m/%Y")
             )
-        # Horário: converte para texto "HH:MM" (vazio fica vazio)
+      # Horário: converte para texto "HH:MM" com ajuste de -1 hora (fuso horário)
         if "Horário" in dados.columns:
-            dados["Horário"] = dados["Horário"].apply(
-                lambda x: x.strftime("%H:%M") if hasattr(x, "strftime")
-                else ("" if pd.isna(x) else str(x))
-            )
+            import datetime as _dt
+
+            def _hora_ajustada(x):
+                # Nulo/vazio -> vazio
+                if x is None:
+                    return ""
+                if pd.isna(x):
+                    return ""
+                # datetime.time (hora sem data): não suporta - Timedelta direto
+                if isinstance(x, _dt.time):
+                    base = _dt.datetime.combine(_dt.date(2000, 1, 1), x)
+                    return (base - _dt.timedelta(hours=1)).strftime("%H:%M")
+                # datetime / Timestamp: subtrai 1h e pega HH:MM
+                if isinstance(x, _dt.datetime):
+                    return (x - _dt.timedelta(hours=1)).strftime("%H:%M")
+                if hasattr(x, "strftime"):
+                    return (x - pd.Timedelta(hours=1)).strftime("%H:%M")
+                # String "HH:MM" ou "HH:MM:SS" -> subtrai 1h
+                s = str(x).strip()
+                if not s:
+                    return ""
+                try:
+                    t = pd.to_datetime(s, format="%H:%M", errors="coerce")
+                    if pd.isna(t):
+                        t = pd.to_datetime(s, format="%H:%M:%S", errors="coerce")
+                    if not pd.isna(t):
+                        return (t - pd.Timedelta(hours=1)).strftime("%H:%M")
+                except Exception:
+                    pass
+                return s  # formato inesperado: devolve como veio
+
+            dados["Horário"] = dados["Horário"].apply(_hora_ajustada)
+
         # País extraído do link da coluna Country (já filtrado no carregamento)
         if "País" in df.columns:
             dados["País"] = df["País"].values
@@ -1158,8 +1198,8 @@ with tab5:
         
         # 6. Filtros numéricos manuais (mín e máx) + filtro GP
         with st.expander("🎛️ Filtros por métricas (mín e máx)", expanded=False):
-            # Linha 1: filtro de DATA (dropdown) + checkbox GP
-            col_top1, col_top2 = st.columns([2, 3])
+            # Linha 1: filtro de DATA (dropdown) + filtro de PAÍSES (multiselect) + checkbox GP
+            col_top1, col_top2, col_top3 = st.columns([2, 2, 2])
             with col_top1:
                 datas_series = dados["Data"].dropna().astype(str)
                 datas_disponiveis = sorted(
@@ -1172,6 +1212,18 @@ with tab5:
                     key="filtro_data",
                 )
             with col_top2:
+                # Filtro de países: opções = países disponíveis na lista de jogos
+                paises_disponiveis = sorted(
+                    dados["País"].dropna().astype(str).unique().tolist()
+                )
+                paises_filtro = st.multiselect(
+                    "🌍 Filtrar por países",
+                    options=paises_disponiveis,
+                    default=[],
+                    key="filtro_paises",
+                    help="Selecione um ou mais países. Vazio = mostra todos.",
+                )
+            with col_top3:
                 filtra_gp = st.checkbox(
                     "⚽ Remover times com menos de 3 jogos (GP)",
                     value=False, key="filtra_gp",
@@ -1186,10 +1238,11 @@ with tab5:
 
             def _min_max_input(label, series, key, step=0.01, format="%.2f"):
                 lo, hi = _limites(series)
+                rn = st.session_state.get("_filtro_reset_n", 0)   # sufixo de reset
                 v_min = st.number_input(f"{label} mín", min_value=lo, max_value=hi,
-                    value=lo, step=step, format=format, key=f"{key}_min")
+                    value=lo, step=step, format=format, key=f"{key}_{rn}_min")
                 v_max = st.number_input(f"{label} máx", min_value=lo, max_value=hi,
-                    value=hi, step=step, format=format, key=f"{key}_max")
+                    value=hi, step=step, format=format, key=f"{key}_{rn}_max")
                 return (v_min, v_max)
 
             st.markdown("**🏠 Mandante**")
@@ -1221,6 +1274,12 @@ with tab5:
                 class_v = _min_max_input("Classificação", dados["Classif Fora"], "class_v", step=1.0, format="%.0f")
             with col_v6:
                 odd_v = _min_max_input("Odd", dados["Odd Fora"], "odd_v")
+
+            st.markdown("---")
+            if st.button("🧹 Limpar todos os filtros", key="limpar_todos_filtros", use_container_width=True):
+                st.session_state["_filtro_reset_n"] = st.session_state.get("_filtro_reset_n", 0) + 1
+                st.session_state["_reset_filtros"] = True
+                st.rerun()
         # 
         # 7. Aplica os filtros pré-definidos (se marcados)
         if filtra_lay_0x1:
@@ -1266,6 +1325,9 @@ with tab5:
         # Filtro de data (dropdown) — "Todas" = sem filtro
         if data_filtro != "Todas":
             dados = dados[dados["Data"].astype(str) == data_filtro]
+        # Filtro de países (multiselect) — vazio = mostra todos
+        if paises_filtro:
+            dados = dados[dados["País"].astype(str).isin(paises_filtro)]
         if filtra_gp:
             dados = dados[(dados["GP"] >= 3) & (dados["GP Visitante"] >= 3)]
         # Filtros manuais: valores vazios (NaN) SEMPRE passam
@@ -1640,12 +1702,118 @@ with tab6:
             ["_ordem_data", "Horário"], ascending=[True, True], na_position="last"
         ).drop(columns=["_ordem_data"]).reset_index(drop=True)
 
-        st.dataframe(
+                # ---- FILTROS DE TEXTO LIVRE (mandante, visitante, métodos) ----
+        st.markdown("**🔎 Filtros de busca**")
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            busca_mandante = st.text_input("🏠 Mandante", key="busca_mandante_tab6",
+                placeholder="Digite parte do nome...")
+        with col_f2:
+            busca_visitante = st.text_input("✈️ Visitante", key="busca_visitante_tab6",
+                placeholder="Digite parte do nome...")
+        with col_f3:
+            busca_metodos = st.text_input("🎯 Métodos", key="busca_metodos_tab6",
+                placeholder="Digite parte do método...")
+
+        # Aplica os filtros de texto (busca parcial, sem diferenciar maiúsculas)
+        if busca_mandante.strip():
+            df_consulta = df_consulta[
+                df_consulta["Time Mandante"].astype(str).str.contains(
+                    busca_mandante.strip(), case=False, na=False
+                )
+            ]
+        if busca_visitante.strip():
+            df_consulta = df_consulta[
+                df_consulta["Time Visitante"].astype(str).str.contains(
+                    busca_visitante.strip(), case=False, na=False
+                )
+            ]
+        if busca_metodos.strip():
+            df_consulta = df_consulta[
+                df_consulta["Métodos"].astype(str).str.contains(
+                    busca_metodos.strip(), case=False, na=False
+                )
+            ]
+
+ # ---- Coluna de seleção para exclusão (checkbox por linha) ----
+        df_consulta["Excluir"] = False
+
+        # Lista de índices marcados (sobrevive a reruns — diferente do estado interno do editor)
+        if "_sel_excluir" not in st.session_state:
+            st.session_state["_sel_excluir"] = []
+
+        # Callback: captura as linhas marcadas no MOMENTO em que o checkbox muda
+        def _captura_selecao():
+            estado = st.session_state.get("editor_metodos_tab6")
+            indices = []
+            if estado and estado.get("edited_rows"):
+                for idx, mud in estado["edited_rows"].items():
+                    if mud.get("Excluir"):
+                        indices.append(int(idx))
+            st.session_state["_sel_excluir"] = indices
+
+        def _cv(v):
+            if v is None:
+                return ""
+            s = str(v).strip()
+            return "" if s.lower() == "nan" else s
+
+        # ---- Botão EXCLUIR (entre o expander de adição e a tabela) ----
+        if st.button("🗑️ Excluir jogos marcados", key="btn_excluir_jogos", use_container_width=True):
+            indices = st.session_state.get("_sel_excluir", [])
+            # Fallback defensivo: se o callback não capturou, tenta o estado atual do editor
+            if not indices:
+                estado = st.session_state.get("editor_metodos_tab6")
+                if estado and estado.get("edited_rows"):
+                    for idx, mud in estado["edited_rows"].items():
+                        if mud.get("Excluir"):
+                            indices.append(int(idx))
+            if not indices:
+                st.info("Nenhum jogo marcado para exclusão.")
+            else:
+                linhas_excluir = []
+                for i in sorted(set(indices)):
+                    if i >= len(df_consulta):
+                        continue
+                    r = df_consulta.loc[i]
+                    linhas_excluir.append({
+                        "data": _cv(r.get("Data", "")),
+                        "pais": _cv(r.get("País", "")),
+                        "mandante": _cv(r.get("Time Mandante", "")),
+                        "horario": _cv(r.get("Horário", "")),
+                        "visitante": _cv(r.get("Time Visitante", "")),
+                        "metodos": _cv(r.get("Métodos", "")),
+                    })
+                if not linhas_excluir:
+                    st.info("Nenhum jogo marcado para exclusão.")
+                else:
+                    resp = deletar_metodos(linhas_excluir)
+                    if resp.get("ok"):
+                        st.success(f"🗑️ {len(linhas_excluir)} jogo(s) excluído(s) da planilha!")
+                        st.session_state["_sel_excluir"] = []   # limpa a seleção
+                        load_metodos_jogos.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"Erro ao excluir: {resp}")
+
+        # ---- Tabela com checkbox de exclusão na última coluna ----
+        st.data_editor(
             df_consulta,
             hide_index=True,
             use_container_width=True,
             height=520,
+            disabled=[c for c in df_consulta.columns if c != "Excluir"],
+            column_config={
+                "Excluir": st.column_config.CheckboxColumn(
+                    "Excluir",
+                    help="Marque os jogos a excluir e clique em 🗑️ Excluir jogos marcados",
+                    default=False,
+                ),
+            },
+            key="editor_metodos_tab6",
+            on_change=_captura_selecao,
         )
+
         st.caption(f"📋 {len(df_consulta)} partidas classificadas")
     else:
         st.info("Nenhum método salvo ainda. Marque os métodos na tabela principal e clique em 💾 Salvar seleções.")
