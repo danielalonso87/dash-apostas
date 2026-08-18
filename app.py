@@ -168,13 +168,12 @@ with tab1:
                     st.session_state.pop("_aplicar_padrao", None)   # consome o sinal (só aplica 1x)
                 selected_sub = st.multiselect("Submétodo", options=submétodos, key="sub_ms")
                 # APLICA O FILTRO pelos submétodos selecionados (linha essencial)
-                # Métodos SEM submétodo (ex.: "Lay Fora") têm Placar vazio/NaN e
-                # precisam continuar sendo contabilizados — por isso são mantidos.
+                # Compara como TEXTO (normalizado) para bater com os valores da base,
+                # mantendo métodos sem submétodo (ex.: "Lay Fora") contabilizados.
                 if selected_sub:
+                    _placar_str = df_filtered['Placar'].fillna('').astype(str).str.strip()
                     df_filtered = df_filtered[
-                        df_filtered['Placar'].isna() |                          # sem submétodo
-                        (df_filtered['Placar'].astype(str).str.strip() == "") | # vazio
-                        df_filtered['Placar'].isin(selected_sub)                # submétodo selecionado
+                        (_placar_str == '') | _placar_str.isin(selected_sub)
                     ]
 
         # ===== LINHA 2: Odd mín | Odd máx | Faixa odd =====
@@ -462,22 +461,29 @@ with tab1:
     with col_pizza2:
         st.markdown("**Por Submétodo (Placar)**")
         if 'Placar' in df_filtered.columns and 'L/P Líquido' in df_filtered.columns:
-            # Filtra apenas os submétodos do(s) método(s) selecionado(s)
+            # Base do gráfico: dados já filtrados (e pelos métodos selecionados, se houver)
+            df_pizza_sub = df_filtered.copy()
             if selected_metodos:
-                df_pizza_sub = df_filtered[df_filtered['Método'].isin(selected_metodos)]
-            else:
-                df_pizza_sub = df_filtered.copy()
+                df_pizza_sub = df_pizza_sub[df_pizza_sub['Método'].isin(selected_metodos)]
 
-            lucro_sub = df_pizza_sub.groupby('Placar')['L/P Líquido'].sum().reset_index()
+            # Placar SEMPRE como texto (rótulos tipo "0x0", "0x1", "2x0", "1x1")
+            df_pizza_sub['Placar'] = (
+                df_pizza_sub['Placar'].fillna('').astype(str).str.strip()
+                .replace({'nan': '', 'None': ''})
+            )
+
+            # Soma o lucro por submétodo, ignorando vazios e lucro zero
+            lucro_sub = (
+                df_pizza_sub[df_pizza_sub['Placar'] != '']
+                .groupby('Placar')['L/P Líquido'].sum()
+                .reset_index()
+            )
             lucro_sub = lucro_sub[lucro_sub['L/P Líquido'] != 0]
-            # Remove valores vazios ou com espaço só
-            lucro_sub = lucro_sub[lucro_sub['Placar'].notna()]
-            lucro_sub = lucro_sub[lucro_sub['Placar'].str.strip() != '']
 
-            if not lucro_sub.empty:
-                # Ordena do maior lucro para o menor
-                lucro_sub = lucro_sub.sort_values('L/P Líquido', ascending=True)
-
+            if lucro_sub.empty:
+                st.info("Sem dados para exibir")
+            else:
+                ordem = lucro_sub.sort_values('L/P Líquido')['Placar'].tolist()
                 fig_sub = px.bar(
                     lucro_sub,
                     x='L/P Líquido',
@@ -486,23 +492,18 @@ with tab1:
                     title="Lucro por Submétodo",
                     color='L/P Líquido',
                     color_continuous_scale=['#FF5252', '#FFD740', '#00C853'],
-                    text_auto='.2s'
+                    text_auto='.2s',
+                    category_orders={'Placar': ordem},
                 )
                 fig_sub.update_layout(
                     xaxis=dict(title="", tickprefix="R$ ", tickfont=dict(size=10)),
-                    yaxis=dict(title="", tickfont=dict(size=10)),
+                    yaxis=dict(title="", tickfont=dict(size=10), type='category'),
                     showlegend=False,
                     coloraxis_showscale=False,
-                    height=400
+                    height=400,
                 )
-                fig_sub.update_traces(
-                    textposition='outside',
-                    hoverinfo='none',
-                    textfont=dict(size=12)
-                )
+                fig_sub.update_traces(textposition='outside', hoverinfo='none', textfont=dict(size=12))
                 st.plotly_chart(fig_sub, use_container_width=True, config={'staticPlot': True})
-            else:
-                st.info("Sem dados para exibir")
 
     # --- TABELA INTERATIVA ---
     with st.expander("📋 Ver dados completos da base filtrada"):

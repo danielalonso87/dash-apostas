@@ -17,6 +17,12 @@ def load_data():
     df = pd.read_excel(path, sheet_name=sheet, header=1)
     df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
     df = df.dropna(how='all')
+    # Placar (submétodos) SEMPRE como TEXTO — evita "0x0"/"0x1"/"2x0"/"1x1"
+    # serem interpretados como números (0x0=0, 0x1=0, 2x0=0, 1x1=1)
+    if 'Placar' in df.columns:
+        # Converte TODAS as células (numéricas e texto) para string SEMPRE,
+        # preservando o "x" quando existir e evitando "0x0" virar 0.
+        df['Placar'] = df['Placar'].astype(str).str.strip().replace({'nan': '', 'None': ''})
     for col in ['Data', 'Data de liquidação']:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
