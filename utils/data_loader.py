@@ -147,24 +147,34 @@ def salvar_depara(de, para):
     return False
 
 def _push_excel_para_github():
-    """Envia o Trading Esportivo.xlsx para o GitHub se houver mudança."""
+    """Envia o Trading Esportivo.xlsx e a lista de jogos para o GitHub se houver mudança."""
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        rel = os.path.relpath(os.getenv("DATA_PATH", "data/Trading Esportivo.xlsx"),
-                              base_dir).replace(os.sep, '/')
 
-        subprocess.run(['git', 'add', rel], cwd=base_dir,
-                       capture_output=True, text=True, check=True)
-        r = subprocess.run(['git', 'commit', '-m', 'Atualiza Trading Esportivo.xlsx'],
+        # MESMA resolução do código original (que funcionava)
+        rel_excel = os.path.relpath(
+            os.getenv("DATA_PATH", "data/Trading Esportivo.xlsx"), base_dir
+        ).replace(os.sep, '/')
+
+        # Pasta real onde o Excel está, derivada do próprio caminho resolvido
+        pasta = os.path.dirname(os.path.normpath(os.path.join(base_dir, rel_excel)))
+
+        # Adiciona os .xlsx da pasta (só os 2: Trading Esportivo + lista de jogos)
+        for nome in os.listdir(pasta):
+            if nome.lower().endswith(".xlsx"):
+                rel = os.path.relpath(os.path.join(pasta, nome), base_dir).replace(os.sep, '/')
+                subprocess.run(['git', 'add', rel], cwd=base_dir,
+                               capture_output=True, text=True, check=True)
+
+        r = subprocess.run(['git', 'commit', '-m', 'Atualiza bases do dashboard (Trading Esportivo + lista de jogos)'],
                            cwd=base_dir, capture_output=True, text=True)
         # Só faz push se realmente houve commit (evita push desnecessário)
         if r.returncode == 0:
             subprocess.run(['git', 'push'], cwd=base_dir,
                            capture_output=True, text=True, check=True)
-            st.success("✅ Excel enviado para o GitHub!")
+            st.success("✅ Excel e lista de jogos enviados para o GitHub!")
     except Exception as e:
-        st.warning(f"⚠️ Não foi possível enviar o Excel ao GitHub: {e}")
-
+        st.warning(f"⚠️ Não foi possível enviar ao GitHub: {e}")
 
 @st.cache_data(ttl=86400, show_spinner=False)   # 5 min — arquivo muda raramente
 def load_lista_jogos():
