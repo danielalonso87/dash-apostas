@@ -418,6 +418,95 @@ with tab1:
             st.info("Colunas necessárias não encontradas nos dados.")
 
     st.markdown("---")
+    # --- GRÁFICOS POR CAMPEONATO (NOVA LINHA, UM AO LADO DO OUTRO) ---
+    # Slider comum aos dois gráficos: quantos campeonatos mostrar em cada extremo
+    n_extremos = st.slider(
+        "🏆 Mostrar top N melhores e piores por campeonato",
+        min_value=3, max_value=20, value=10, step=1,
+        help="Mostra os N campeonatos com maior lucro e os N com maior prejuízo (ou mais apostas). O meio fica de fora para facilitar a leitura."
+    )
+
+    col_camp1, col_camp2 = st.columns(2)
+
+    with col_camp1:
+        st.subheader("💰 Lucro (em Stakes) por Campeonato")
+        if 'Campeonato' in df_filtered.columns and 'Stakes' in df_filtered.columns:
+            df_camp = df_filtered.copy()
+            df_camp['Campeonato'] = df_camp['Campeonato'].fillna('Não informado').astype(str).str.strip()
+            # Soma o lucro em stakes (coluna Stakes) por campeonato
+            lucro_camp = df_camp.groupby('Campeonato')['Stakes'].sum().reset_index()
+            lucro_camp = lucro_camp[lucro_camp['Stakes'] != 0]
+            if not lucro_camp.empty:
+                # Pega os N maiores e os N menores (extremos), remove duplicatas
+                top = lucro_camp.nlargest(n_extremos, 'Stakes')
+                bottom = lucro_camp.nsmallest(n_extremos, 'Stakes')
+                lucro_camp = pd.concat([top, bottom]).drop_duplicates('Campeonato')
+                # Ordena do maior prejuízo para o maior lucro (visual limpo)
+                lucro_camp = lucro_camp.sort_values('Stakes', ascending=True)
+                n_fora = df_camp['Campeonato'].nunique() - len(lucro_camp)
+                st.caption(f"Mostrando {len(lucro_camp)} de {df_camp['Campeonato'].nunique()} campeonatos" + (f" · {n_fora} fora" if n_fora > 0 else ""))
+                fig_camp = px.bar(
+                    lucro_camp,
+                    x='Stakes',
+                    y='Campeonato',
+                    orientation='h',
+                    title="Lucro (em Stakes) por Campeonato",
+                    color='Stakes',
+                    color_continuous_scale=['#FF5252', '#FFD740', '#00C853'],
+                    text_auto='.2f'
+                )
+                fig_camp.update_layout(
+                    xaxis=dict(title="", tickfont=dict(size=10)),
+                    yaxis=dict(title="", tickfont=dict(size=10)),
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    height=max(400, len(lucro_camp) * 28)
+                )
+                fig_camp.update_traces(textposition='outside', hoverinfo='none', textfont=dict(size=12))
+                st.plotly_chart(fig_camp, use_container_width=True, config={'staticPlot': True})
+            else:
+                st.info("Sem dados para exibir")
+        else:
+            st.info("Colunas necessárias não encontradas nos dados.")
+
+    with col_camp2:
+        st.subheader("📊 Apostas por Campeonato")
+        if 'Campeonato' in df_filtered.columns:
+            df_camp2 = df_filtered.copy()
+            df_camp2['Campeonato'] = df_camp2['Campeonato'].fillna('Não informado').astype(str).str.strip()
+            df_camp2 = df_camp2[df_camp2['Campeonato'] != '']
+            apostas_camp = df_camp2.groupby('Campeonato').size().reset_index(name='Quantidade')
+            if not apostas_camp.empty:
+                # Pega os N com mais apostas e os N com menos (extremos)
+                top = apostas_camp.nlargest(n_extremos, 'Quantidade')
+                bottom = apostas_camp.nsmallest(n_extremos, 'Quantidade')
+                apostas_camp = pd.concat([top, bottom]).drop_duplicates('Campeonato')
+                apostas_camp = apostas_camp.sort_values('Quantidade', ascending=True)
+                n_fora = df_camp2['Campeonato'].nunique() - len(apostas_camp)
+                st.caption(f"Mostrando {len(apostas_camp)} de {df_camp2['Campeonato'].nunique()} campeonatos" + (f" · {n_fora} fora" if n_fora > 0 else ""))
+                fig_camp2 = px.bar(
+                    apostas_camp,
+                    x='Quantidade',
+                    y='Campeonato',
+                    orientation='h',
+                    title="Quantidade de Apostas por Campeonato",
+                    color='Quantidade',
+                    color_continuous_scale='Blues',
+                    text_auto=True
+                )
+                fig_camp2.update_layout(
+                    xaxis=dict(title="", tickfont=dict(size=10)),
+                    yaxis=dict(title="", tickfont=dict(size=10)),
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    height=max(400, len(apostas_camp) * 28)
+                )
+                fig_camp2.update_traces(textposition='outside', hoverinfo='none', textfont=dict(size=12))
+                st.plotly_chart(fig_camp2, use_container_width=True, config={'staticPlot': True})
+            else:
+                st.info("Sem dados para exibir")
+
+    st.markdown("---")
     st.subheader("🥧 Distribuição do Lucro")
 
     col_pizza1, col_pizza2 = st.columns(2)
@@ -996,12 +1085,12 @@ with tab4:
     # ============================================================
     # BnR 0x1
     # ============================================================
-    st.markdown("**🎯 BnR 0x1**")
-    c1, c2 = st.columns(2)
-    with c1:
-        _criterio("≤ 26", "#FF9800", "Odd máxima do jogo")
-    with c2:
-        _criterio("≤ 1,7", "#FF9800", "Odd do mandante (casa)")
+    # st.markdown("**🎯 BnR 0x1**")
+    # c1, c2 = st.columns(2)
+    # with c1:
+    #     _criterio("≤ 26", "#FF9800", "Odd máxima do jogo")
+    # with c2:
+    #     _criterio("≤ 1,7", "#FF9800", "Odd do mandante (casa)")
 
     # ============================================================
     # BnR Lay Fora
@@ -1094,10 +1183,17 @@ with tab5:
             dados[c] = dados[c] * 100
         # Data: converte para DD/MM/AAAA (vazio fica vazio)
         if "Data" in dados.columns:
-            dados["Data"] = (
-                pd.to_datetime(dados["Data"], errors="coerce", dayfirst=True)
-                .dt.strftime("%d/%m/%Y")
+            # Converte para datetime para permitir subtração de dias
+            _dt_data = pd.to_datetime(dados["Data"], errors="coerce", dayfirst=True)
+            # Jogos às 22:00+ OU à meia-noite (00:00) pertencem ao dia anterior
+            # (base de origem) -> subtrai 1 dia
+            _hora_num = pd.to_numeric(
+                dados["Horário"].astype(str).str.replace(":", "").str.slice(0, 2),
+                errors="coerce"
             )
+            _apos_22 = (_hora_num >= 22) | (_hora_num == 0)   # 22h+ ou 00h
+            _dt_data = _dt_data - pd.Timedelta(days=1) * _apos_22.astype(int)
+            dados["Data"] = _dt_data.dt.strftime("%d/%m/%Y")
       # Horário: converte para texto "HH:MM" com ajuste de -1 hora (fuso horário)
         if "Horário" in dados.columns:
             import datetime as _dt
@@ -1378,8 +1474,8 @@ with tab5:
         ]
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
-            "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", "Lay Zebra",
-            "BnR 0x1", "BnR Lay Fora", "Masterlist", "Over Limite Lay Fora",
+            "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
+            "BnR Lay Fora", "Lay Zebra", "Masterlist", "Over Limite Lay Fora",
         ]
         def _norm_data(v):
             if not v:
@@ -1575,8 +1671,8 @@ with tab6:
     # ➕ ADICIONAR JOGO MANUALMENTE (formulário único, acumula até salvar)
     # ============================================================
     METODOS_TAB6 = [
-        "Lay 0x1 Zebra", "Lay 1x0", "Lay 0x1 Favorito", "Lay Zebra",
-        "BnR 0x1", "BnR Lay Fora", "Masterlist", "Over Limite Lay Fora",
+        "Lay 0x1 Zebra", "Lay 1x0", "Lay 0x1 Favorito",
+        "BnR Lay Fora", "Lay Zebra", "Masterlist", "Over Limite Lay Fora",
     ]
 
     # estado acumulado (sobrevive aos reruns do Streamlit)
