@@ -90,7 +90,8 @@ with tab1:
     # ============================================================
     METODOS_PADRAO = [
         "Lay CS", "Lay Fora", "Lay Super Zebra",  "Masterlist",
-        "Over Limite Lay Fora", "Projeto +EV", "Valida"
+        # "Over Limite Lay Fora", 
+        "Projeto +EV", "Valida"
     ]
     SUB_PADRAO = [
         "0x0", "0x1", "0x1 Favorito", "0x1 Zebra",
@@ -1105,16 +1106,16 @@ with tab4:
     # ============================================================
     # Over Limite Lay Fora
     # ============================================================
-    st.markdown("**📈 Over Limite Lay Fora**")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        _criterio("0x0 ≥ 1,35", "#2196F3", "Odd mínima Over")
-    with c2:
-        _criterio("0x1 ≥ 1,26", "#2196F3", "Odd mínima Over")
-    with c3:
-        _criterio("1x1 ≥ 1,30", "#2196F3", "Odd mínima Over")
-    with c4:
-        _criterio("2x0 ≥ 1,26", "#2196F3", "Odd mínima Over")
+    # st.markdown("**📈 Over Limite Lay Fora**")
+    # c1, c2, c3, c4 = st.columns(4)
+    # with c1:
+    #     _criterio("0x0 ≥ 1,35", "#2196F3", "Odd mínima Over")
+    # with c2:
+    #     _criterio("0x1 ≥ 1,26", "#2196F3", "Odd mínima Over")
+    # with c3:
+    #     _criterio("1x1 ≥ 1,30", "#2196F3", "Odd mínima Over")
+    # with c4:
+    #     _criterio("2x0 ≥ 1,26", "#2196F3", "Odd mínima Over")
 
     st.markdown("---")
 
@@ -1475,7 +1476,8 @@ with tab5:
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
             "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
-            "BnR Lay Fora", "Lay Zebra", "Masterlist", "Over Limite Lay Fora",
+            "BnR Lay Fora", "Lay Zebra", "Masterlist", 
+            # "Over Limite Lay Fora",
         ]
         def _norm_data(v):
             if not v:
@@ -1671,8 +1673,9 @@ with tab6:
     # ➕ ADICIONAR JOGO MANUALMENTE (formulário único, acumula até salvar)
     # ============================================================
     METODOS_TAB6 = [
-        "Lay 0x1 Zebra", "Lay 1x0", "Lay 0x1 Favorito",
-        "BnR Lay Fora", "Lay Zebra", "Masterlist", "Over Limite Lay Fora",
+        "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito",
+        "BnR Lay Fora", "Lay Zebra", "Masterlist", 
+        # "Over Limite Lay Fora",
     ]
 
     # estado acumulado (sobrevive aos reruns do Streamlit)
