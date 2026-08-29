@@ -89,14 +89,16 @@ with tab1:
     # Constantes usadas pelo filtro (métodos/submétodos padrão)
     # ============================================================
     METODOS_PADRAO = [
-        "Lay CS", "Lay Fora", "Lay Super Zebra",  "Masterlist",
+        # "Lay CS", 
+        "Lay Fora", "Lay Super Zebra",  "Masterlist",
         # "Over Limite Lay Fora", 
         "Projeto +EV", "Valida"
     ]
     SUB_PADRAO = [
-        "0x0", "0x1", "0x1 Favorito", "0x1 Zebra",
-        "1x0 Zebra", "1x1", "2x0", "BTTS",
-        "Casa", "HT/FT Casa", "HT/FT Neutro",
+        # "0x0", "0x1", "1x1", "2x0",
+        # "0x1 Favorito", 
+        "0x1 Zebra", "1x0 Zebra", 
+         "BTTS", "Casa", "HT/FT Casa", "HT/FT Neutro",
         "HT/FT Visitante", "Neutro", "Visitante"
     ]
     if "prev_sel_padrao" not in st.session_state:
@@ -518,6 +520,8 @@ with tab1:
             lucro_metodo = df_filtered.groupby('Método')['L/P Líquido'].sum().reset_index()
             lucro_metodo = lucro_metodo[lucro_metodo['L/P Líquido'] != 0]
             lucro_metodo = lucro_metodo[lucro_metodo['Método'].notna()]
+            # Mantém apenas os 10 métodos com MELHOR lucro
+            lucro_metodo = lucro_metodo.nlargest(10, 'L/P Líquido')
 
             if not lucro_metodo.empty:
                 lucro_metodo = lucro_metodo.sort_values('L/P Líquido', ascending=True)
@@ -527,7 +531,7 @@ with tab1:
                     x='L/P Líquido',
                     y='Método',
                     orientation='h',
-                    title="Lucro por Método",
+                    title="Lucro por Método (top 10)",
                     color='L/P Líquido',
                     color_continuous_scale=['#FF5252', '#FFD740', '#00C853'],
                     text_auto='.2s'
@@ -1475,7 +1479,7 @@ with tab5:
         ]
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
-            "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
+            # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
             "BnR Lay Fora", "Lay Zebra", "Masterlist", 
             # "Over Limite Lay Fora",
         ]
@@ -1673,7 +1677,7 @@ with tab6:
     # ➕ ADICIONAR JOGO MANUALMENTE (formulário único, acumula até salvar)
     # ============================================================
     METODOS_TAB6 = [
-        "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito",
+        # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito",
         "BnR Lay Fora", "Lay Zebra", "Masterlist", 
         # "Over Limite Lay Fora",
     ]
