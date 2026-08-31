@@ -89,8 +89,8 @@ with tab1:
     # Constantes usadas pelo filtro (métodos/submétodos padrão)
     # ============================================================
     METODOS_PADRAO = [
-        # "Lay CS", 
-        "Lay Fora", "Lay Super Zebra",  "Masterlist",
+        # "Lay CS", "Lay Fora", 
+        "Lay Super Zebra",  "Masterlist",
         # "Over Limite Lay Fora", 
         "Projeto +EV", "Valida"
     ]
@@ -1100,12 +1100,12 @@ with tab4:
     # ============================================================
     # BnR Lay Fora
     # ============================================================
-    st.markdown("**🔄 BnR Lay Fora**")
-    c1, c2 = st.columns(2)
-    with c1:
-        _criterio("≥ 7", "#00C853", "Odd do visitante (fora)")
-    with c2:
-        _criterio("1,33 a 2,67", "#00C853", "Faixa de odd para Over 2,5 gols")
+    # st.markdown("**🔄 BnR Lay Fora**")
+    # c1, c2 = st.columns(2)
+    # with c1:
+    #     _criterio("≥ 7", "#00C853", "Odd do visitante (fora)")
+    # with c2:
+    #     _criterio("1,33 a 2,67", "#00C853", "Faixa de odd para Over 2,5 gols")
 
     # ============================================================
     # Over Limite Lay Fora
@@ -1480,7 +1480,8 @@ with tab5:
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
             # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
-            "BnR Lay Fora", "Lay Zebra", "Masterlist", 
+            # "BnR Lay Fora", 
+            "Lay Zebra", "Masterlist", 
             # "Over Limite Lay Fora",
         ]
         def _norm_data(v):
