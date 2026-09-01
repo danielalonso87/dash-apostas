@@ -1481,7 +1481,7 @@ with tab5:
         METODOS = [
             # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
             # "BnR Lay Fora", "Masterlist", 
-            "Lay Zebra", 
+            "Lay Zebra", "0x1 | 1x0"
             # "Over Limite Lay Fora",
         ]
         def _norm_data(v):
@@ -1822,19 +1822,31 @@ with tab6:
             ["_ordem_data", "Horário"], ascending=[True, True], na_position="last"
         ).drop(columns=["_ordem_data"]).reset_index(drop=True)
 
-                # ---- FILTROS DE TEXTO LIVRE (mandante, visitante, métodos) ----
+        # ---- FILTROS DE BUSCA (data, mandante, visitante, métodos) ----
         st.markdown("**🔎 Filtros de busca**")
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
+            # Filtro de DATA (dropdown) — seleciona UMA data
+            datas_disponiveis = sorted(
+                df_consulta["Data"].dropna().astype(str).unique().tolist()
+            )
+            data_filtro = st.selectbox(
+                "📅 Data",
+                options=["Todas"] + datas_disponiveis,
+                key="filtro_data_tab6",
+            )
+        with col_f2:
             busca_mandante = st.text_input("🏠 Mandante", key="busca_mandante_tab6",
                 placeholder="Digite parte do nome...")
-        with col_f2:
+        with col_f3:
             busca_visitante = st.text_input("✈️ Visitante", key="busca_visitante_tab6",
                 placeholder="Digite parte do nome...")
-        with col_f3:
+        with col_f4:
             busca_metodos = st.text_input("🎯 Métodos", key="busca_metodos_tab6",
                 placeholder="Digite parte do método...")
-
+        # Aplica o filtro de DATA (se não for "Todas")
+        if data_filtro != "Todas":
+            df_consulta = df_consulta[df_consulta["Data"].astype(str) == data_filtro]
         # Aplica os filtros de texto (busca parcial, sem diferenciar maiúsculas)
         if busca_mandante.strip():
             df_consulta = df_consulta[
