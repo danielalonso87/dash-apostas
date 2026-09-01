@@ -89,8 +89,8 @@ with tab1:
     # Constantes usadas pelo filtro (métodos/submétodos padrão)
     # ============================================================
     METODOS_PADRAO = [
-        # "Lay CS", "Lay Fora", 
-        "Lay Super Zebra",  "Masterlist",
+        # "Lay CS", "Lay Fora", "Masterlist",
+        "Lay Super Zebra",  
         # "Over Limite Lay Fora", 
         "Projeto +EV", "Valida"
     ]
@@ -1480,8 +1480,8 @@ with tab5:
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
             # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
-            # "BnR Lay Fora", 
-            "Lay Zebra", "Masterlist", 
+            # "BnR Lay Fora", "Masterlist", 
+            "Lay Zebra", 
             # "Over Limite Lay Fora",
         ]
         def _norm_data(v):
@@ -1678,8 +1678,8 @@ with tab6:
     # ➕ ADICIONAR JOGO MANUALMENTE (formulário único, acumula até salvar)
     # ============================================================
     METODOS_TAB6 = [
-        # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito",
-        "BnR Lay Fora", "Lay Zebra", "Masterlist", 
+        # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito","BnR Lay Fora","Masterlist", 
+         "Lay Zebra", 
         # "Over Limite Lay Fora",
     ]
 
