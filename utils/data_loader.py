@@ -7,6 +7,8 @@ import unicodedata
 import re
 import requests
 import pickle
+import openpyxl
+from urllib.parse import urlparse, parse_qs
 
 load_dotenv()
 
@@ -185,8 +187,6 @@ def _push_excel_para_github():
 @st.cache_data(ttl=86400, show_spinner=False)   # 5 min — arquivo muda raramente
 def load_lista_jogos():
     """Carrega a aba 'jogos', extrai o país do hyperlink e filtra os elegíveis."""
-    import openpyxl
-    from urllib.parse import urlparse, parse_qs
     path = os.getenv("LISTA_JOGOS_PATH", "Data/lista_jogos.xlsx")
     if not os.path.exists(path):
         path = os.getenv("LISTA_JOGOS_PATH", "data/lista_jogos.xlsx")
@@ -270,9 +270,13 @@ def _fetch_base_extra():
             errors="coerce",
         ).fillna(0.0),
     })
+    # Coluna de DATA do jogo (nome confirmado: "Date")
+    base["Data"] = df["Date"] if "Date" in df.columns else pd.NaT
     base["Casa_N"] = base["Nome Casa"].map(_normalizar_nome)
     base["Fora_N"] = base["Nome Fora"].map(_normalizar_nome)
-    base = base.drop_duplicates(subset=["Casa_N", "Fora_N"], keep="first")
+    # Normaliza a data para YYYY-MM-DD (canônico) — casa com o lado dos jogos
+    base["Data_N"] = pd.to_datetime(base["Data"], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
+    base = base.drop_duplicates(subset=["Casa_N", "Fora_N", "Data_N"], keep="first")
     return base
 
 @st.cache_data(ttl=86400, show_spinner=False)

@@ -92,14 +92,16 @@ with tab1:
         # "Lay CS", "Lay Fora", "Masterlist",
         "Lay Super Zebra",  
         # "Over Limite Lay Fora", 
-        "Projeto +EV", "Valida"
+        "Projeto +EV", "1x0 | 0x1",
+        "Botbet"
     ]
     SUB_PADRAO = [
         # "0x0", "0x1", "1x1", "2x0",
         # "0x1 Favorito", 
         "0x1 Zebra", "1x0 Zebra", 
          "BTTS", "Casa", "HT/FT Casa", "HT/FT Neutro",
-        "HT/FT Visitante", "Neutro", "Visitante"
+        "HT/FT Visitante", "Neutro", "Visitante", "Visitante LTD",
+        "Lay 1x0 2T"
     ]
     if "prev_sel_padrao" not in st.session_state:
         st.session_state.prev_sel_padrao = False
@@ -804,7 +806,7 @@ with tab2:
     # ============================================================
     # LAY ZEBRA
     # ============================================================
-    with st.expander("🦓❌ Lay Zebra", expanded=True):
+    with st.expander("🦓❌ Lay Zebra (Visitante)", expanded=True):
         c_lay_odd_vis = 8 <= odds_visitante <= 30
         c_lay_over_mand = over25_mandante >= 40
         c_lay_over_vis = over25_visitante >= 40
@@ -1147,7 +1149,7 @@ with tab5:
     # Aplica o reset dos filtros NÃO-numéricos (se o botão foi clicado na execução anterior)
     if st.session_state.pop("_reset_filtros", False):
         for k in ["filtro_lay_0x1", "filtro_lay_1x0", "filtro_lay_fav", "filtro_lay_zebra_novo",
-                  "filtro_data", "filtro_paises", "filtra_gp"]:
+                  "filtro_lay_zebra_mandante", "filtro_data", "filtro_paises", "filtra_gp"]:
             st.session_state.pop(k, None)
     try:
         df = load_lista_jogos()   # agora CACHEADA
@@ -1188,10 +1190,9 @@ with tab5:
             dados[c] = dados[c] * 100
         # Data: converte para DD/MM/AAAA (vazio fica vazio)
         if "Data" in dados.columns:
-            # Converte para datetime para permitir subtração de dias
             _dt_data = pd.to_datetime(dados["Data"], errors="coerce", dayfirst=True)
-            # Jogos às 22:00+ OU à meia-noite (00:00) pertencem ao dia anterior
-            # (base de origem) -> subtrai 1 dia
+            # Guarda a data ORIGINAL do jogo (sem o ajuste d-1) para casar com a base
+            dados["_Data_orig"] = pd.to_datetime(dados["Data"], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
             _hora_num = pd.to_numeric(
                 dados["Horário"].astype(str).str.replace(":", "").str.slice(0, 2),
                 errors="coerce"
@@ -1268,21 +1269,35 @@ with tab5:
             dados["Fora_N"] = (
                 dados["Time Visitante"].map(_normalizar_nome).map(lambda x: depara.get(x, x))
             )
-            classif_map = {}
+            classif_map = {}        # chave (time, data) -> classif (preferida)
+            classif_map_time = {}   # chave (time) -> classif (fallback)
             for _, r in base.iterrows():
                 if isinstance(r["Casa_N"], str) and r["Casa_N"]:
-                    classif_map[r["Casa_N"]] = int(r["Classif Geral Casa"])
+                    classif_map_time[r["Casa_N"]] = int(r["Classif Geral Casa"])
+                    if pd.notna(r.get("Data_N")):
+                        classif_map[(r["Casa_N"], r["Data_N"])] = int(r["Classif Geral Casa"])
                 if isinstance(r["Fora_N"], str) and r["Fora_N"]:
-                    classif_map[r["Fora_N"]] = int(r["Classif Geral Fora"])
-                        # DIAGNÓSTICO TEMPORÁRIO — Wolverhampton
-            import sys
+                    classif_map_time[r["Fora_N"]] = int(r["Classif Geral Fora"])
+                    if pd.notna(r.get("Data_N")):
+                        classif_map[(r["Fora_N"], r["Data_N"])] = int(r["Classif Geral Fora"])
+            # Prefere (time, data); se não achar, cai para (time) — nunca fica zerado
+            def _classif(chave, nome):
+                return classif_map.get(chave, classif_map_time.get(nome, 0))
+            chaves_casa = list(zip(dados["Casa_N"], dados["_Data_orig"]))
+            chaves_fora = list(zip(dados["Fora_N"], dados["_Data_orig"]))
+            dados["Classif Casa"] = [_classif(k, n) for k, n in zip(chaves_casa, dados["Casa_N"])]
+            dados["Classif Fora"] = [_classif(k, n) for k, n in zip(chaves_fora, dados["Fora_N"])]
 
             odds_map = {}
             for _, r in base.iterrows():
                 chave = (r["Casa_N"], r["Fora_N"])
                 odds_map.setdefault(chave, (float(r["Odd Abertura Casa"]), float(r["Odd Abertura Visitante"])))
-            dados["Classif Casa"] = dados["Casa_N"].map(classif_map).fillna(0).astype(int)
-            dados["Classif Fora"] = dados["Fora_N"].map(classif_map).fillna(0).astype(int)
+            # Busca a classificação por (time, data do jogo) — resolve o caso
+            # de um mesmo time com mais de um jogo na base
+            chaves_casa = list(zip(dados["Casa_N"], dados["_Data_orig"]))
+            chaves_fora = list(zip(dados["Fora_N"], dados["_Data_orig"]))
+            dados["Classif Casa"] = [classif_map.get(k, 0) for k in chaves_casa]
+            dados["Classif Fora"] = [classif_map.get(k, 0) for k in chaves_fora]
             chaves = list(zip(dados["Casa_N"], dados["Fora_N"]))
             dados["Odd Casa"] = [odds_map.get(k, (0.0, 0.0))[0] for k in chaves]
             dados["Odd Fora"] = [odds_map.get(k, (0.0, 0.0))[1] for k in chaves]
@@ -1298,7 +1313,7 @@ with tab5:
         # 5. Filtros pré-definidos (checkboxes)
         # 
         st.markdown("### ⚡ Filtros pré-definidos")
-        col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+        col_p1, col_p2, col_p3, col_p4, col_p5 = st.columns(5)
         with col_p1:
             filtra_lay_0x1 = st.checkbox("🦓 Lay 0x1 Zebra", key="filtro_lay_0x1",
                 help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, total de gols ≥ 2.8. Odd visitante > odd mandante e classif visitante > mandante (0 libera)")
@@ -1309,8 +1324,11 @@ with tab5:
             filtra_lay_fav = st.checkbox("⭐ Lay 0x1 Favorito", key="filtro_lay_fav",
                 help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, gols sofridos casa ≥ 1, gols marcados fora ≥ 1.5. Odd mandante > odd visitante e classif mandante > visitante (0 libera)")
         with col_p4:
-            filtra_lay_zebra_novo = st.checkbox("🦓 Lay Zebra", key="filtro_lay_zebra_novo",
+            filtra_lay_zebra_novo = st.checkbox("🦓 Lay Zebra (Visitante)", key="filtro_lay_zebra_novo",
                 help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, gols marcados casa ≥ 1.5, gols sofridos casa ≤ 1.3, gols marcados fora ≤ 1.4, gols sofridos fora ≥ 1.4, gols marcados fora ≤ gols sofridos fora. Odd visitante > odd mandante e classif visitante > mandante (0 libera)")
+        with col_p5:
+            filtra_lay_zebra_mandante = st.checkbox("🦓 Lay Zebra (Mandante)", key="filtro_lay_zebra_mandante",
+                help="Over 2.5 ≥ 40% (casa e fora), média ≥ 50%, gols marcados fora ≥ 1.5, gols sofridos fora ≤ 1.3, gols marcados casa ≤ 1.4, gols sofridos casa ≥ 1.4, gols marcados casa ≤ gols sofridos casa. Odd mandante > odd visitante e classif mandante > visitante (0 libera)")
         # 
         
         # 6. Filtros numéricos manuais (mín e máx) + filtro GP
@@ -1436,6 +1454,18 @@ with tab5:
             cond_odd = ((dados["Odd Fora"] == 0) | (dados["Odd Casa"] == 0) | (dados["Odd Fora"] > dados["Odd Casa"]))
             cond_class = ((dados["Classif Fora"] == 0) | (dados["Classif Casa"] == 0) | (dados["Classif Fora"] > dados["Classif Casa"]))
             dados = dados[cond_odd & cond_class]
+        if filtra_lay_zebra_mandante:
+            dados = dados[(dados["Over 2.5"] >= 40) & (dados["Over 2.5 Visitante"] >= 40)]
+            media_over = (dados["Over 2.5"] + dados["Over 2.5 Visitante"]) / 2
+            dados = dados[media_over >= 50]
+            dados = dados[dados["Gols Marcados Visitante"] >= 1.5]
+            dados = dados[dados["Gols Sofridos Visitante"] <= 1.3]
+            dados = dados[dados["Gols Marcados"] <= 1.4]
+            dados = dados[dados["Gols Sofridos"] >= 1.4]
+            dados = dados[dados["Gols Marcados"] <= dados["Gols Sofridos"]]
+            cond_odd = ((dados["Odd Casa"] == 0) | (dados["Odd Fora"] == 0) | (dados["Odd Casa"] > dados["Odd Fora"]))
+            cond_class = ((dados["Classif Casa"] == 0) | (dados["Classif Fora"] == 0) | (dados["Classif Casa"] > dados["Classif Fora"]))
+            dados = dados[cond_odd & cond_class]
         # 
         # 8. Aplica o filtro de GP (se marcado) + filtros numéricos manuais
         #
@@ -1530,10 +1560,10 @@ with tab5:
             "Gols Marcados Visitante": st.column_config.TextColumn("Gols Marcados (Fora)", alignment="center"),
             "Gols Sofridos Visitante": st.column_config.TextColumn("Gols Sofridos (Fora)", alignment="center"),
             "Total de Gols Visitante": st.column_config.TextColumn("Total de Gols (Fora)", alignment="center"),
-            "GP": st.column_config.TextColumn("GP", alignment="center"),
-            "GP Visitante": st.column_config.TextColumn("GP (Fora)", alignment="center"),
-            "Classif Casa": st.column_config.TextColumn("Classif Casa", alignment="center"),
-            "Classif Fora": st.column_config.TextColumn("Classif Fora", alignment="center"),
+            "GP": st.column_config.NumberColumn("GP", alignment="center"),
+            "GP Visitante": st.column_config.NumberColumn("GP (Fora)", alignment="center"),
+            "Classif Casa": st.column_config.NumberColumn("Classif Casa", alignment="center"),
+            "Classif Fora": st.column_config.NumberColumn("Classif Fora", alignment="center"),
             "Odd Casa": st.column_config.TextColumn("Odd Casa", alignment="center"),
             "Odd Fora": st.column_config.TextColumn("Odd Fora", alignment="center"),
         }
@@ -1570,13 +1600,15 @@ with tab5:
             return v
 
         # Numéricas -> string formatada (vazio = "")
+        # GP, GP Visitante, Classif Casa e Classif Fora ficam NUMÉRICAS para
+        # que a ordenação na tabela seja numérica (10, 11, 12 vêm DEPOIS do 2).
         for c in num_cols_exibidas:
             if c not in dados.columns:
                 continue
+            if c in ("GP", "GP Visitante", "Classif Casa", "Classif Fora"):
+                continue   # mantém como número -> ordenação correta no editor
             if c in ("Over 2.5", "Over 2.5 Visitante"):
                 dados[c] = dados[c].map(lambda v: _fmt(v, "{:.0f}%"))
-            elif c in ("GP", "GP Visitante", "Classif Casa", "Classif Fora"):
-                dados[c] = dados[c].map(lambda v: _fmt(v, "{:.0f}"))
             else:
                 dados[c] = dados[c].map(lambda v: _fmt(v, "{:.2f}"))
 
