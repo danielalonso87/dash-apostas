@@ -284,6 +284,22 @@ def load_metodos_jogos():
     """Retorna lista de dicts: data, pais, mandante, horario, visitante, metodos. Só cache em memória."""
     return _fetch_metodos_jogos()
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_campeonatos():
+    """Aba Campeonatos (Sheets). Fallback: campeonatos.csv local."""
+    d = _get_gs("campeonatos")
+    if d and d.get("ok"):
+        campeonatos = set(str(c).strip() for c in d.get("campeonatos", []) if str(c).strip())
+        if campeonatos:
+            return sorted(campeonatos)
+    for path in [os.getenv("CAMPEONATOS_PATH", "Data/campeonatos.csv"),
+                 os.getenv("CAMPEONATOS_PATH", "data/campeonatos.csv")]:
+        if os.path.exists(path):
+            df = pd.read_csv(path, header=None)
+            col = df.columns[0]
+            return sorted(set(df[col].dropna().astype(str).str.strip().tolist()))
+    return []
+
 def _fetch_metodos_jogos():
     try:
         r = requests.get(METODOS_URL, timeout=30)

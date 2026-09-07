@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import math
-from utils.data_loader import _push_excel_para_github, load_data, load_metodos, load_metodos_jogos, load_lista_jogos, load_base_extra, load_depara, _normalizar_nome, salvar_depara, salvar_metodos, _get_gs, _post_gs, deletar_metodos, CACHE_DIR
+from utils.data_loader import _push_excel_para_github, load_data, load_metodos, load_metodos_jogos, load_lista_jogos, load_base_extra, load_depara, _normalizar_nome, salvar_depara, salvar_metodos, _get_gs, _post_gs, deletar_metodos, load_campeonatos, CACHE_DIR
 from utils.metrics import calculate_kpis, calcular_stakes
 import re
 import datetime as _dt
@@ -106,11 +106,18 @@ with tab1:
     if "prev_sel_padrao" not in st.session_state:
         st.session_state.prev_sel_padrao = False
     with st.expander("🔍 Filtros", expanded=False):
-        # ---- Checkbox (definido ANTES dos multiselects, que usam o valor) ----
-        selecionar_padrao = st.checkbox(
-            "⚡ Selecionar métodos padrão", key="sel_padrao",
-            help="Marca todos os métodos e submétodos padrão de uma vez"
-        )
+        # ---- Checkboxes (definidos ANTES dos multiselects, que usam os valores) ----
+        col_padrao, col_camp = st.columns(2)
+        with col_padrao:
+            selecionar_padrao = st.checkbox(
+                "⚡ Selecionar métodos padrão", key="sel_padrao",
+                help="Marca todos os métodos e submétodos padrão de uma vez"
+            )
+        with col_camp:
+            filtrar_campeonatos = st.checkbox(
+                "🏆 Filtrar Campeonatos", key="filtro_campeonatos",
+                help="Filtra a base apenas pelos campeonatos listados na aba 'Campeonatos' do Google Sheets"
+            )
         # Aplica o efeito SOMENTE quando o estado do checkbox muda:
         # - ao marcar   -> sinaliza os multiselects para selecionarem os padrão
         # - ao desmarcar -> esvazia os multiselects e desfaz o filtro
@@ -148,6 +155,14 @@ with tab1:
                                      (df['Data'] < pd.Timestamp(date_range[1]) + pd.Timedelta(days=1))].copy()
                 else:
                     df_filtered = df.copy()
+                # ---- Filtro de Campeonatos (aba Campeonatos do Sheets) ----
+        if filtrar_campeonatos:
+            campeonatos_filtro = load_campeonatos()
+            if campeonatos_filtro and 'Campeonato' in df_filtered.columns:
+                _camp_norm = {_normalizar_nome(c) for c in campeonatos_filtro if _normalizar_nome(c)}
+                df_filtered = df_filtered[
+                    df_filtered['Campeonato'].fillna('').astype(str).map(_normalizar_nome).isin(_camp_norm)
+                ]
         with c_f3:
             if 'Método' in df.columns:
                 metodos = sorted(df_filtered['Método'].dropna().unique())
