@@ -1524,7 +1524,8 @@ with tab5:
         ]
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
-            # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito", 
+            "Lay 0x1 Zebra", "Lay 1x0 Zebra", 
+            # "Lay 0x1 Favorito", 
             # "BnR Lay Fora", "Masterlist", 
             "Lay Zebra", "0x1 | 1x0"
             # "Over Limite Lay Fora",
@@ -1725,7 +1726,8 @@ with tab6:
     # ➕ ADICIONAR JOGO MANUALMENTE (formulário único, acumula até salvar)
     # ============================================================
     METODOS_TAB6 = [
-        # "Lay 0x1 Zebra", "Lay 1x0 Zebra", "Lay 0x1 Favorito","BnR Lay Fora","Masterlist", 
+        "Lay 0x1 Zebra", "Lay 1x0 Zebra", 
+        # "Lay 0x1 Favorito","BnR Lay Fora","Masterlist", 
          "Lay Zebra", 
         # "Over Limite Lay Fora",
     ]
