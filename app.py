@@ -89,7 +89,8 @@ with tab1:
     # Constantes usadas pelo filtro (métodos/submétodos padrão)
     # ============================================================
     METODOS_PADRAO = [
-        # "Lay CS", "Lay Fora", "Masterlist",
+        "Lay CS", 
+        # "Lay Fora", "Masterlist",
         "Lay Super Zebra",  
         # "Over Limite Lay Fora", 
         "Projeto +EV", "1x0 | 0x1",
@@ -130,7 +131,7 @@ with tab1:
                 st.session_state["sub_ms"] = []
 
         # ===== LINHA 1: Mês | Período | Método | Submétodo =====
-        c_f1, c_f2, c_f3, c_f4 = st.columns([1, 1.4, 1.6, 1.6])
+        c_f1, c_f2, c_f3, c_f4 = st.columns([0.5, 0.7, 2.2, 2.2])
         with c_f1:
             if 'Data' in df.columns:
                 min_date = df['Data'].min().date()
@@ -155,20 +156,27 @@ with tab1:
                                      (df['Data'] < pd.Timestamp(date_range[1]) + pd.Timedelta(days=1))].copy()
                 else:
                     df_filtered = df.copy()
-                # ---- Filtro de Campeonatos (aba Campeonatos do Sheets) ----
+        # ---- Filtro de Campeonatos (aba Campeonatos do Sheets) ----
         if filtrar_campeonatos:
             campeonatos_filtro = load_campeonatos()
             if campeonatos_filtro and 'Campeonato' in df_filtered.columns:
                 _camp_norm = {_normalizar_nome(c) for c in campeonatos_filtro if _normalizar_nome(c)}
-                df_filtered = df_filtered[
-                    df_filtered['Campeonato'].fillna('').astype(str).map(_normalizar_nome).isin(_camp_norm)
-                ]
+                _camp_raw = df_filtered['Campeonato']
+                # "Vazio de verdade": NaN OU textos que representam ausência de campeonato
+                _vazio_like = {"", "nan", "none", "null", "na", "n/a", "-", "—", "–",
+                               "sem campeonato", "sem informacao", "s/info", "0",
+                               "nao informado", "não informado", "nao informada", "não informada"}
+                _camp_str = _camp_raw.fillna('').astype(str).str.strip().str.lower()
+                _camp_norm_s = _camp_raw.fillna('').astype(str).map(_normalizar_nome)
+                _eh_vazio = _camp_raw.isna() | _camp_str.isin(_vazio_like) | (_camp_norm_s == '')
+                df_filtered = df_filtered[_camp_norm_s.isin(_camp_norm) | _eh_vazio]
         with c_f3:
             if 'Método' in df.columns:
-                metodos = sorted(df_filtered['Método'].dropna().unique())
+                # Opções SEMPRE da base COMPLETA (antes do filtro de campeonato)
+                metodos = sorted(df['Método'].dropna().unique())
                 metodos_padrao_validos = [m for m in METODOS_PADRAO if m in metodos]
-                # Se o checkbox foi marcado nesta execução, seleciona os métodos padrão
-                if st.session_state.get("_aplicar_padrao"):
+                # FORÇA a seleção padrão SEMPRE que o checkbox estiver marcado
+                if selecionar_padrao:
                     st.session_state["metodos_ms"] = metodos_padrao_validos
                 selected_metodos = st.multiselect("Método", options=metodos, key="metodos_ms")
                 # APLICA O FILTRO pelos métodos selecionados (linha essencial)
@@ -177,19 +185,16 @@ with tab1:
         with c_f4:
             if 'Placar' in df.columns and 'Método' in df.columns:
                 if selected_metodos:
-                    placar_disponiveis = df_filtered[df_filtered['Método'].isin(selected_metodos)]['Placar'].dropna().unique()
+                    placar_disponiveis = df[df['Método'].isin(selected_metodos)]['Placar'].dropna().unique()
                 else:
                     placar_disponiveis = df['Placar'].dropna().unique()
                 submétodos = sorted(placar_disponiveis)
                 sub_padrao_validos = [s for s in SUB_PADRAO if s in submétodos]
-                # Se o checkbox foi marcado nesta execução, seleciona os submétodos padrão
-                if st.session_state.get("_aplicar_padrao"):
+                # FORÇA a seleção padrão SEMPRE que o checkbox estiver marcado
+                if selecionar_padrao:
                     st.session_state["sub_ms"] = sub_padrao_validos
-                    st.session_state.pop("_aplicar_padrao", None)   # consome o sinal (só aplica 1x)
                 selected_sub = st.multiselect("Submétodo", options=submétodos, key="sub_ms")
                 # APLICA O FILTRO pelos submétodos selecionados (linha essencial)
-                # Compara como TEXTO (normalizado) para bater com os valores da base,
-                # mantendo métodos sem submétodo (ex.: "Lay Fora") contabilizados.
                 if selected_sub:
                     _placar_str = df_filtered['Placar'].fillna('').astype(str).str.strip()
                     df_filtered = df_filtered[
