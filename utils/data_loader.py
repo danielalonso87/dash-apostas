@@ -242,7 +242,7 @@ def _normalizar_nome(nome):
     return n
 
 
-SHEET_ID = "1PULV-NfTqPNwOUMbsV2YJYWb_CfirDoFn4b1vG7hHFE"
+SHEET_ID = "1WH5N3qLvzbw5Vxkpv7TK5-u6xEpCZrZ0q3HWni9uTSo"
 SHEET_GID = 1612712257  # aba "Jogos Futuros do PAINEL"
 
 @st.cache_data(ttl=86400, show_spinner=False)

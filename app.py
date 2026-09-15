@@ -78,31 +78,56 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard", "🧮 Calculador
 
 with tab1:
     # --- TÍTULO + AÇÃO (mesma linha, botão pequeno e discreto) ---
-    col_titulo, col_acao = st.columns([7, 1], vertical_alignment="center")
+    # --- TÍTULO + AÇÕES (mesma linha, botões pequenos e discretos) ---
+    col_titulo, col_acao, col_cache = st.columns([7, 1, 1], vertical_alignment="center")
     with col_titulo:
         st.title("📊 Dashboard de Trading Esportivo")
     with col_acao:
         if st.button("📤 GitHub", help="Sobe a base atualizada para o repositório", key="btn_envia_excel"):
             _push_excel_para_github()
+    with col_cache:
+        if st.button("🧹 Limpar Cache", help="Apaga o cache (pasta .cache + st.cache_data) e recarrega o app",
+                     key="btn_limpa_cache"):
+            import os as _os, sys as _sys, shutil as _shutil, glob as _glob
+            # 1) Cache em MEMÓRIA do Streamlit (todas as funções @st.cache_data)
+            st.cache_data.clear()
+            # 2) Cache em DISCO — usa o CACHE_DIR do data_loader (fonte da verdade)
+            _cache_dir = None
+            for _nome in ("data_loader", "utils.data_loader"):
+                _m = _sys.modules.get(_nome)
+                if _m is not None and getattr(_m, "CACHE_DIR", None):
+                    _cache_dir = _m.CACHE_DIR
+                    break
+            if _cache_dir:
+                _shutil.rmtree(_cache_dir, ignore_errors=True)   # apaga a pasta .cache inteira
+                # pkls soltos na MESMA pasta do .cache (não toca em venv/site-packages)
+                for _p in _glob.glob(_os.path.join(_os.path.dirname(_cache_dir), "*.pkl")):
+                    try:
+                        _os.remove(_p)
+                    except Exception:
+                        pass
+            st.toast("🧹 Cache limpo! Recarregando...")
+            st.rerun()
 
    # ============================================================
     # Constantes usadas pelo filtro (métodos/submétodos padrão)
     # ============================================================
     METODOS_PADRAO = [
-        "Lay CS", 
+        # "Lay CS", 
         # "Lay Fora", "Masterlist",
         "Lay Super Zebra",  
         # "Over Limite Lay Fora", 
-        "Projeto +EV", "1x0 | 0x1",
-        "Botbet"
+        "Projeto +EV", 
+        # "1x0 | 0x1",
+        # "Botbet"
     ]
     SUB_PADRAO = [
         # "0x0", "0x1", "1x1", "2x0",
         # "0x1 Favorito", 
-        "0x1 Zebra", "1x0 Zebra", 
+        # "0x1 Zebra", "1x0 Zebra", 
          "BTTS", "Casa", "HT/FT Casa", "HT/FT Neutro",
         "HT/FT Visitante", "Neutro", "Visitante", "Visitante LTD",
-        "Lay 1x0 2T"
+        # "Lay 1x0 2T"
     ]
     if "prev_sel_padrao" not in st.session_state:
         st.session_state.prev_sel_padrao = False
@@ -1220,6 +1245,8 @@ with tab5:
             _apos_22 = (_hora_num >= 22) | (_hora_num == 0)   # 22h+ ou 00h
             _dt_data = _dt_data - pd.Timedelta(days=1) * _apos_22.astype(int)
             dados["Data"] = _dt_data.dt.strftime("%d/%m/%Y")
+            # Data AJUSTADA (d-1) em formato canônico — é a que casa com a base
+            dados["_Data_ajustada"] = _dt_data.dt.strftime("%Y-%m-%d")
       # Horário: converte para texto "HH:MM" com ajuste de -1 hora (fuso horário)
         if "Horário" in dados.columns:
             import datetime as _dt
@@ -1303,21 +1330,22 @@ with tab5:
             # Prefere (time, data); se não achar, cai para (time) — nunca fica zerado
             def _classif(chave, nome):
                 return classif_map.get(chave, classif_map_time.get(nome, 0))
-            chaves_casa = list(zip(dados["Casa_N"], dados["_Data_orig"]))
-            chaves_fora = list(zip(dados["Fora_N"], dados["_Data_orig"]))
-            dados["Classif Casa"] = [_classif(k, n) for k, n in zip(chaves_casa, dados["Casa_N"])]
-            dados["Classif Fora"] = [_classif(k, n) for k, n in zip(chaves_fora, dados["Fora_N"])]
 
             odds_map = {}
             for _, r in base.iterrows():
                 chave = (r["Casa_N"], r["Fora_N"])
                 odds_map.setdefault(chave, (float(r["Odd Abertura Casa"]), float(r["Odd Abertura Visitante"])))
-            # Busca a classificação por (time, data do jogo) — resolve o caso
-            # de um mesmo time com mais de um jogo na base
-            chaves_casa = list(zip(dados["Casa_N"], dados["_Data_orig"]))
-            chaves_fora = list(zip(dados["Fora_N"], dados["_Data_orig"]))
-            dados["Classif Casa"] = [classif_map.get(k, 0) for k in chaves_casa]
-            dados["Classif Fora"] = [classif_map.get(k, 0) for k in chaves_fora]
+            # Busca a classificação por (time, data AJUSTADA) com fallback por time
+            def _classif_final(chave, nome):
+                v = classif_map.get(chave)
+                if v is not None:
+                    return v
+                return classif_map_time.get(nome, 0)
+
+            chaves_casa = list(zip(dados["Casa_N"], dados["_Data_ajustada"]))
+            chaves_fora = list(zip(dados["Fora_N"], dados["_Data_ajustada"]))
+            dados["Classif Casa"] = [_classif_final(k, n) for k, n in zip(chaves_casa, dados["Casa_N"])]
+            dados["Classif Fora"] = [_classif_final(k, n) for k, n in zip(chaves_fora, dados["Fora_N"])]
             chaves = list(zip(dados["Casa_N"], dados["Fora_N"]))
             dados["Odd Casa"] = [odds_map.get(k, (0.0, 0.0))[0] for k in chaves]
             dados["Odd Fora"] = [odds_map.get(k, (0.0, 0.0))[1] for k in chaves]
@@ -1529,10 +1557,11 @@ with tab5:
         ]
         dados = dados[[c for c in ordem_colunas if c in dados.columns]]
         METODOS = [
-            "Lay 0x1 Zebra", "Lay 1x0 Zebra", 
+            # "Lay 0x1 Zebra", "Lay 1x0 Zebra", 
             # "Lay 0x1 Favorito", 
             # "BnR Lay Fora", "Masterlist", 
-            "Lay Zebra", "0x1 | 1x0"
+            "Lay Zebra", 
+            # "0x1 | 1x0"
             # "Over Limite Lay Fora",
         ]
         def _norm_data(v):
