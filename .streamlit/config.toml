@@ -1,0 +1,8 @@
+# Tema padrão do projeto: abre sempre em escuro.
+# Para trocar: menu ⋮ (canto superior direito) -> Settings -> Theme -> Light / Dark.
+[theme]
+base = "dark"
+
+[client]
+# Barra do topo enxuta: só o menu ⋮ (sem botão Deploy etc.)
+toolbarMode = "minimal"

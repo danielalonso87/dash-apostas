@@ -1,6 +1,7 @@
-import pandas as pd
-import math
 import unicodedata
+
+import numpy as np
+import pandas as pd
 import streamlit as st
 
 @st.cache_data(show_spinner=False)
@@ -12,13 +13,12 @@ def calculate_kpis(df):
     total_stakes = df['Stake/Responsabilidade'].sum() if 'Stake/Responsabilidade' in df.columns else 0
 
     kpis = {
-        'Lucro Total': lucro_total,
         'Total de Apostas': total_apostas,
         'Green %': (total_green / total_apostas * 100) if total_apostas > 0 else 0,
         'ROI %': (lucro_total / total_stakes * 100) if total_stakes > 0 else 0,
         'Odd Média': df['Odd'].mean() if 'Odd' in df.columns else 0,
         'Ticket Médio': df['Stake/Responsabilidade'].mean() if 'Stake/Responsabilidade' in df.columns else 0,
-        'Lucro Líquido': df['L/P Líquido'].sum() if 'L/P Líquido' in df.columns else 0,
+        'Lucro Líquido': lucro_total,
         'Lucro Bruto': df['L/P Bruto'].sum() if 'L/P Bruto' in df.columns else 0,
         'Comissão Total': df['ComissãoR$'].sum() if 'ComissãoR$' in df.columns else 0,
         'Maior Odd Green': df.loc[df['Resultado_Binario'] == 1, 'Odd'].max() if 'Odd' in df.columns and 'Resultado_Binario' in df.columns else 0,
@@ -154,12 +154,11 @@ def calcular_stakes(df_metodos, banca, dd_pct, tipo_red='Red Médio'):
     red_usado = df_m['Red Máximo'] if tipo_red == 'Red Máximo' else df_m['Red Médio']
     # Red já é % (ex: 5 = 5%). Perda máx por aposta = red% * stake
     # stake = (DD * banca) / N / red%
-    df_m['Stake (R$)'] = (dd_max * banca) / df_m['Perdas Cons.'] / red_usado
-    df_m['Stake %'] = df_m['Stake (R$)'] / banca * 100.0
+    # Red zerado/vazio geraria stake infinita -> fica vazio
+    df_m['Stake (R$)'] = (dd_max * banca) / df_m['Perdas Cons.'] / red_usado.replace(0, np.nan)
+    df_m['Stake %'] = df_m['Stake (R$)'] / banca * 100.0 if banca else np.nan
 
     # --- Expectativa de Resultado em Stakes (EV * apostas/mês, piso 1 casa) ---
-    import math as _math
-    df_m['Exp. Resultado (stakes)'] = df_m.apply(
-        lambda r: _math.floor(r['EV'] * r['Apostas/mês'] * 10) / 10.0, axis=1)
+    df_m['Exp. Resultado (stakes)'] = np.floor(df_m['EV'] * df_m['Apostas/mês'] * 10) / 10.0
 
-    return df_m, None
+    return df_m, None

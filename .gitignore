@@ -5,13 +5,11 @@ venv/
 # Variáveis de ambiente (segredos)
 .env
 
-# Cache Python
+# Cache
 __pycache__/
 *.pyc
+utils/.cache/
 
-# Dados sensíveis (Excel com suas apostas)
-# data/*.xlsx
-# Data/*.xlsx
-
-# Config local
-# config_stakes.json
+# Arquivos temporários do Excel / backups
+data/~$*
+data/*_formato_antigo.xlsx

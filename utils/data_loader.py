@@ -1,369 +1,492 @@
-import pandas as pd
-import os, time, json
-from dotenv import load_dotenv
-import streamlit as st
-import subprocess
-import unicodedata
-import re
-import requests
+"""Carregamento e gravação de dados do dashboard.
+
+Estratégia de desempenho:
+- Excel lido com o motor `calamine` (Rust, ~8x mais rápido que openpyxl) e cache
+  atrelado à data de modificação do arquivo: abriu o Excel e salvou -> o app
+  recarrega sozinho; não mudou -> leitura instantânea do cache.
+- Dados de referência do Google Sheets (paises, depara, campeonatos, métodos
+  stats, base extra) baixados EM PARALELO, com cache em memória + disco (6h).
+- Dados que você grava (métodos por jogo e config de stakes) ficam num
+  "store" em memória: depois de salvar, o store é atualizado localmente em vez
+  de baixar tudo de novo — a gravação custa só o POST.
+"""
+from __future__ import annotations
+
+import io
+import os
 import pickle
-import openpyxl
-from urllib.parse import urlparse, parse_qs
+import re
+import subprocess
+import time
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor
+
+import pandas as pd
+import requests
+import streamlit as st
+from dotenv import load_dotenv
 
 load_dotenv()
 
-@st.cache_data(ttl=86400, show_spinner=False)   # 5 min
-def load_data():
-    path = os.getenv("DATA_PATH", "data/Trading Esportivo.xlsx")
-    sheet = os.getenv("SHEET_NAME", "Base")
-    df = pd.read_excel(path, sheet_name=sheet, header=1)
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
-    df = df.dropna(how='all')
-    # Placar (submétodos) SEMPRE como TEXTO — evita "0x0"/"0x1"/"2x0"/"1x1"
-    # serem interpretados como números (0x0=0, 0x1=0, 2x0=0, 1x1=1)
-    if 'Placar' in df.columns:
-        # Converte TODAS as células (numéricas e texto) para string SEMPRE,
-        # preservando o "x" quando existir e evitando "0x0" virar 0.
-        df['Placar'] = df['Placar'].astype(str).str.strip().replace({'nan': '', 'None': ''})
-    for col in ['Data', 'Data de liquidação']:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-    if 'Horário' in df.columns and 'Data' in df.columns:
-        hora_td = pd.to_timedelta(df['Horário'].dt.time.astype(str), errors='coerce')
-        df['Data'] = df['Data'] + hora_td.fillna(pd.Timedelta(0))
-    num_cols = ['L/P Líquido', 'Comissão%', 'L/P Bruto', 'Odd',
-                'Stake/Responsabilidade', 'ComissãoR$', 'Stakes', 'Resultado_Binario']
-    for col in num_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    if 'Campeonato' in df.columns:
-        df['Campeonato'] = df['Campeonato'].fillna('Não informado')
-    return df
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_DIR = os.path.join(BASE_DIR, "utils", ".cache")
 
-# ============================================================
-# GOOGLE SHEETS — LEITURA E GRAVAÇÃO via Web App Apps Script
-# ============================================================
-METODOS_URL = os.getenv("METODOS_URL", "https://script.google.com/macros/s/AKfycbw_ARXW6wdw5ty4owuQWYQrPDh6ZcyH9p6NWBDG67834H474DAeKbkEmt6o_QPV75gg/exec")
+METODOS_URL = os.getenv(
+    "METODOS_URL",
+    "https://script.google.com/macros/s/AKfycbw_ARXW6wdw5ty4owuQWYQrPDh6ZcyH9p6NWBDG67834H474DAeKbkEmt6o_QPV75gg/exec",
+)
+SHEET_ID = "1WH5N3qLvzbw5Vxkpv7TK5-u6xEpCZrZ0q3HWni9uTSo"
+SHEET_GID = 1612712257  # aba "Jogos Futuros do PAINEL"
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def _get_gs(fonte):
-    """GET no web app com parâmetro fonte (metodos|config|depara|paises|metodos_stats)."""
+TTL_REFERENCIA = 6 * 3600   # paises, depara, campeonatos, métodos stats, base extra
+TTL_GRAVAVEL = 10 * 60      # métodos por jogo / config (podem mudar em outro dispositivo)
+HTTP_TIMEOUT = 30
+
+
+def caminho(env_var: str, padrao: str) -> str:
+    """Resolve caminhos relativos a partir da pasta do projeto (não do cwd)."""
+    p = os.getenv(env_var, padrao)
+    return p if os.path.isabs(p) else os.path.join(BASE_DIR, p)
+
+
+DATA_PATH = caminho("DATA_PATH", "data/Trading Esportivo.xlsx")
+LISTA_JOGOS_PATH = caminho("LISTA_JOGOS_PATH", "data/lista_jogos.xlsx")
+CONFIG_LOCAL = os.path.join(BASE_DIR, "data", "config_stakes.json")
+
+
+def _read_excel(path, **kw):
     try:
-        url = METODOS_URL + "?fonte=" + str(fonte)
-        r = requests.get(url, timeout=30)   # SEM allow_redirects=False — segue o 302
+        return pd.read_excel(path, engine="calamine", **kw)
+    except ImportError:  # python-calamine não instalado -> mais lento, mas funciona
+        return pd.read_excel(path, **kw)
+
+
+def _mtime(path: str) -> float:
+    return os.path.getmtime(path) if os.path.exists(path) else 0.0
+
+
+# ============================================================
+# NORMALIZAÇÃO
+# ============================================================
+_RE_ESPACOS = re.compile(r"[\s  -​  　]+")
+_RE_APOSTROFOS = re.compile(r"['‘’ʼ‛′]")
+
+
+def _normalizar_nome(nome) -> str:
+    """Padroniza nome de time: sem acentos, apóstrofos, espaços extras; minúsculo."""
+    if not isinstance(nome, str):
+        return ""
+    n = _RE_APOSTROFOS.sub("", _RE_ESPACOS.sub(" ", nome))
+    n = unicodedata.normalize("NFD", n)
+    n = "".join(c for c in n if unicodedata.category(c) != "Mn")
+    return " ".join(n.lower().split())
+
+
+def norm_data(v) -> str:
+    """Qualquer data (ISO, 'AAAA-MM-DD', 'DD/MM/AAAA') -> 'AAAA-MM-DD'."""
+    if not v:
+        return ""
+    s = str(v).split("T")[0].split(" ")[0]
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    return f"{m.group(3)}-{m.group(2).zfill(2)}-{m.group(1).zfill(2)}" if m else s
+
+
+def chave_jogo(data, pais, mandante, visitante) -> str:
+    """Chave única de um jogo na aba Métodos."""
+    return "|".join([norm_data(data), str(pais), str(mandante), str(visitante)]).lower()
+
+
+# ============================================================
+# BASE DE APOSTAS (Trading Esportivo.xlsx)
+# ============================================================
+def load_data() -> pd.DataFrame:
+    return _load_data(DATA_PATH, os.getenv("SHEET_NAME", "Base"), _mtime(DATA_PATH))
+
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def _load_data(path, sheet, mtime):
+    df = _read_excel(path, sheet_name=sheet, header=1)
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")].dropna(how="all")
+
+    # Placar SEMPRE texto ("0x0" não pode virar 0)
+    if "Placar" in df.columns:
+        df["Placar"] = df["Placar"].astype(str).str.strip().replace({"nan": "", "None": ""})
+    for col in ("Data", "Data de liquidação"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+    if "Horário" in df.columns and "Data" in df.columns:
+        h = df["Horário"]
+        if pd.api.types.is_datetime64_any_dtype(h):
+            hora = h - h.dt.normalize()
+        else:  # célula só com hora (datetime.time) ou texto
+            hora = pd.to_timedelta(h.astype(str), errors="coerce")
+        df["Data"] = df["Data"] + hora.fillna(pd.Timedelta(0))
+    for col in ("L/P Líquido", "Comissão%", "L/P Bruto", "Odd", "Stake/Responsabilidade",
+                "ComissãoR$", "Stakes", "Resultado_Binario"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "Campeonato" in df.columns:
+        df["Campeonato"] = df["Campeonato"].fillna("Não informado")
+    return df.reset_index(drop=True)
+
+
+# ============================================================
+# LISTA DE JOGOS (gerada por utils/soccerstats.py)
+# ============================================================
+def load_lista_jogos() -> pd.DataFrame:
+    """Lista de jogos já filtrada pelos países elegíveis (aba Paises)."""
+    df = _load_lista_jogos(LISTA_JOGOS_PATH, _mtime(LISTA_JOGOS_PATH))
+    paises = load_paises_elegiveis()
+    if paises and not df.empty:
+        df = df[df["pais"].isin(paises)]
+    return df.reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def _load_lista_jogos(path, mtime):
+    from utils.soccerstats import ler_planilha
+    return ler_planilha(path)
+
+
+# ============================================================
+# GOOGLE SHEETS (Web App do Apps Script)
+# ============================================================
+def _get_gs(fonte: str | None = None):
+    """GET no web app (fonte = metodos_stats | config | depara | paises | campeonatos)."""
+    try:
+        params = {"fonte": fonte} if fonte else None
+        r = requests.get(METODOS_URL, params=params, timeout=HTTP_TIMEOUT)
         return r.json()
     except Exception as e:
-        print(f"[aviso] _get_gs({fonte}): {e}")
+        print(f"[aviso] GET {fonte or 'metodos'}: {e}")
         return None
 
-def _post_gs(payload):
-    """POST no web app (campo 'destino' controla a aba)."""
+
+def _post_gs(payload: dict) -> dict:
+    """POST no web app.
+
+    O Apps Script responde 302 apontando para a resposta do doPost. Seguir o
+    redirect com POST dá 405, então lemos a resposta com GET (não reexecuta
+    nada) para confirmar de verdade se gravou.
+    """
     try:
-        r = requests.post(METODOS_URL, json=payload, allow_redirects=False, timeout=30)
-        # 302/301 = doPost executou e gravou; não seguimos o redirect (evita o 405)
-        if r.status_code in (301, 302, 303, 307, 308):
-            return {"ok": True}
-        try:
-            return r.json()
-        except Exception:
-            return {"ok": True}
+        r = requests.post(METODOS_URL, json=payload, allow_redirects=False, timeout=HTTP_TIMEOUT)
     except Exception as e:
-        print(f"[aviso] _post_gs: {e}")
-        return None
+        return {"ok": False, "erro": str(e)}
+    if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+        try:
+            r = requests.get(r.headers["Location"], timeout=10)
+        except Exception:
+            return {"ok": True}       # o doPost já rodou; só não deu para ler a resposta
+    elif r.status_code >= 400:
+        return {"ok": False, "erro": f"HTTP {r.status_code}"}
+    try:
+        resp = r.json()
+    except Exception:
+        return {"ok": True}
+    if not isinstance(resp, dict):
+        return {"ok": True}
+    if resp.get("ok") is False or resp.get("error") or resp.get("erro"):
+        resp["ok"] = False
+    else:
+        resp["ok"] = True
+    return resp
 
-def load_metodos():
-    """Estatísticas por MÉTODO — aba MetodosStats (Sheets). Fallback: metodos.xlsx local."""
-    d = _get_gs("metodos_stats")
+
+def _baixar_base_extra():
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={SHEET_GID}"
+    r = requests.get(url, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    return pd.read_csv(io.StringIO(r.content.decode("utf-8")))
+
+
+# ---------- Referências: baixadas em paralelo, cache memória + disco ----------
+_FONTES_REF = {
+    "metodos_stats": lambda: _get_gs("metodos_stats"),
+    "paises": lambda: _get_gs("paises"),
+    "depara": lambda: _get_gs("depara"),
+    "campeonatos": lambda: _get_gs("campeonatos"),
+    "base_extra": lambda: _baixar_base_extra(),
+}
+
+
+def _baixar_em_paralelo(tarefas: dict) -> dict:
+    def seguro(f):
+        try:
+            return f()
+        except Exception as e:
+            print(f"[aviso] download: {e}")
+            return None
+    with ThreadPoolExecutor(max_workers=len(tarefas) or 1) as ex:
+        futuros = {k: ex.submit(seguro, f) for k, f in tarefas.items()}
+        return {k: f.result() for k, f in futuros.items()}
+
+
+@st.cache_data(ttl=TTL_REFERENCIA, show_spinner=False)
+def _referencias() -> dict:
+    path = os.path.join(CACHE_DIR, "referencias.pkl")
+    if os.path.exists(path) and time.time() - os.path.getmtime(path) < TTL_REFERENCIA:
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+    tarefas = dict(_FONTES_REF)
+    # Aproveita a mesma rodada paralela para aquecer os dados graváveis
+    for nome, store in (("metodos_jogos", _store_metodos()), ("config", _store_config())):
+        if store["dados"] is None:
+            tarefas[nome] = (lambda n=nome: _get_gs(None if n == "metodos_jogos" else n))
+    dados = _baixar_em_paralelo(tarefas)
+    if "metodos_jogos" in dados:
+        _store_metodos().update(dados=_parse_metodos_jogos(dados.pop("metodos_jogos")), ts=time.time())
+    if "config" in dados:
+        _store_config().update(dados=_parse_config(dados.pop("config")), ts=time.time())
+    ref = {
+        "metodos_stats": _parse_metodos_stats(dados["metodos_stats"]),
+        "paises": _parse_paises(dados["paises"]),
+        "depara": _parse_depara(dados["depara"]),
+        "campeonatos": _parse_campeonatos(dados["campeonatos"]),
+        "base_extra": _parse_base_extra(dados["base_extra"]),
+    }
+    # Só grava em disco se tudo veio (não persiste falha de rede por 6h)
+    if all(v is not None and len(v) for v in ref.values()):
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(path, "wb") as f:
+                pickle.dump(ref, f)
+        except Exception as e:
+            print(f"[aviso] cache em disco: {e}")
+    return ref
+
+
+def _parse_metodos_stats(d):
     if d and d.get("ok") and d.get("rows"):
         df = pd.DataFrame(d["rows"])
         df.columns = [str(c).strip() for c in df.columns]
         return df
-    for path in [os.getenv("METODOS_STATS_PATH", "Data/metodos.xlsx"),
-                 os.getenv("METODOS_STATS_PATH", "data/metodos.xlsx")]:
-        if os.path.exists(path):
-            df = pd.read_excel(path)
+    for p in (caminho("METODOS_STATS_PATH", "data/metodos.xlsx"),):
+        if os.path.exists(p):
+            df = _read_excel(p)
             df.columns = [str(c).strip() for c in df.columns]
             return df
     return pd.DataFrame()
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def load_paises_elegiveis():
-    """Aba Paises (Sheets). Fallback: paises.csv local. Cache em disco."""
-    return _cache_local("paises", _fetch_paises, ttl=21600)
 
-def _fetch_paises():
-    d = _get_gs("paises")
+def _parse_paises(d):
     if d and d.get("ok"):
-        return set(str(p).strip().lower() for p in d.get("paises", []) if str(p).strip())
-    for path in [os.getenv("PAISES_PATH", "Data/paises.csv"),
-                 os.getenv("PAISES_PATH", "data/paises.csv")]:
-        if os.path.exists(path):
-            df = pd.read_csv(path, header=None)
-            col = df.columns[0]
-            return set(df[col].dropna().astype(str).str.strip().str.lower().tolist())
+        return {str(p).strip().lower() for p in d.get("paises", []) if str(p).strip()}
+    p = caminho("PAISES_PATH", "data/paises.csv")
+    if os.path.exists(p):
+        s = pd.read_csv(p, header=None).iloc[:, 0]
+        return set(s.dropna().astype(str).str.strip().str.lower())
     return set()
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def load_depara():
-    """Aba Depara (Sheets). Fallback: depara.csv local. Cache em disco."""
-    return _cache_local("depara", _fetch_depara, ttl=21600)
 
-def _fetch_depara():
-    d = _get_gs("depara")
+def _parse_depara(d):
+    depara = {}
     if d and d.get("ok"):
-        depara = {}
         for item in d.get("depara", []):
-            de = _normalizar_nome(str(item.get("de", "")))
-            para = _normalizar_nome(str(item.get("para", "")))
+            de, para = _normalizar_nome(str(item.get("de", ""))), _normalizar_nome(str(item.get("para", "")))
             if de and para:
                 depara[de] = para
         return depara
-    path = os.getenv("DEPARA_PATH", "Data/depara.csv")
-    if not os.path.exists(path):
-        path = os.getenv("DEPARA_PATH", "data/depara.csv")
-    depara = {}
-    if os.path.exists(path):
+    p = caminho("DEPARA_PATH", "data/depara.csv")
+    if os.path.exists(p):
         try:
-            df = pd.read_csv(path, dtype=str, sep=None, engine="python", encoding="utf-8")
+            df = pd.read_csv(p, dtype=str, sep=None, engine="python", encoding="utf-8")
         except UnicodeDecodeError:
-            df = pd.read_csv(path, dtype=str, sep=None, engine="python", encoding="latin-1")
-        col_de = next((c for c in df.columns if c.strip().lower() in ("de", "origem")), df.columns[0])
-        col_para = next((c for c in df.columns if c.strip().lower() in ("para", "destino")),
-                        df.columns[1] if len(df.columns) > 1 else df.columns[0])
-        for _, row in df.iterrows():
-            de = _normalizar_nome(row[col_de]) if pd.notna(row[col_de]) else ""
-            para = _normalizar_nome(row[col_para]) if pd.notna(row[col_para]) else ""
+            df = pd.read_csv(p, dtype=str, sep=None, engine="python", encoding="latin-1")
+        for de, para in zip(df.iloc[:, 0], df.iloc[:, min(1, df.shape[1] - 1)]):
+            de, para = _normalizar_nome(de), _normalizar_nome(para)
             if de and para:
                 depara[de] = para
     return depara
 
-def salvar_depara(de, para):
-    """Grava (ou atualiza) mapeamento na aba Depara (Sheets). Fallback: csv local."""
-    resp = _post_gs({"destino": "depara", "linhas": [{"de": de, "para": para}]})
-    if resp and resp.get("ok"):
-        return True
-    path = os.getenv("DEPARA_PATH", "Data/depara.csv")
-    if not os.path.exists(path):
-        path = os.getenv("DEPARA_PATH", "data/depara.csv")
-    de_n = _normalizar_nome(de)
-    registros = []
-    if os.path.exists(path):
-        registros = pd.read_csv(path, dtype=str).values.tolist()
-    registros = [r for r in registros if _normalizar_nome(str(r[0])) != de_n]
-    registros.append([de, para])
-    pd.DataFrame(registros, columns=["De", "Para"]).to_csv(path, index=False)
-    return False
 
-def _push_excel_para_github():
-    """Envia o Trading Esportivo.xlsx e a lista de jogos para o GitHub se houver mudança."""
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-
-        # MESMA resolução do código original (que funcionava)
-        rel_excel = os.path.relpath(
-            os.getenv("DATA_PATH", "data/Trading Esportivo.xlsx"), base_dir
-        ).replace(os.sep, '/')
-
-        # Pasta real onde o Excel está, derivada do próprio caminho resolvido
-        pasta = os.path.dirname(os.path.normpath(os.path.join(base_dir, rel_excel)))
-
-        # Adiciona os .xlsx da pasta (só os 2: Trading Esportivo + lista de jogos)
-        for nome in os.listdir(pasta):
-            if nome.lower().endswith(".xlsx"):
-                rel = os.path.relpath(os.path.join(pasta, nome), base_dir).replace(os.sep, '/')
-                subprocess.run(['git', 'add', rel], cwd=base_dir,
-                               capture_output=True, text=True, check=True)
-
-        r = subprocess.run(['git', 'commit', '-m', 'Atualiza bases do dashboard (Trading Esportivo + lista de jogos)'],
-                           cwd=base_dir, capture_output=True, text=True)
-        # Só faz push se realmente houve commit (evita push desnecessário)
-        if r.returncode == 0:
-            subprocess.run(['git', 'push'], cwd=base_dir,
-                           capture_output=True, text=True, check=True)
-            st.success("✅ Excel e lista de jogos enviados para o GitHub!")
-    except Exception as e:
-        st.warning(f"⚠️ Não foi possível enviar ao GitHub: {e}")
-
-@st.cache_data(ttl=86400, show_spinner=False)   # 5 min — arquivo muda raramente
-def load_lista_jogos():
-    """Carrega a aba 'jogos', extrai o país do hyperlink e filtra os elegíveis."""
-    path = os.getenv("LISTA_JOGOS_PATH", "Data/lista_jogos.xlsx")
-    if not os.path.exists(path):
-        path = os.getenv("LISTA_JOGOS_PATH", "data/lista_jogos.xlsx")
-    df = pd.read_excel(path, sheet_name="jogos", header=0)
-    # Abre com openpyxl para acessar os hyperlinks (pandas não os lê)
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb["jogos"]
-    # Coluna A (Country) = primeira coluna; pula o cabeçalho (min_row=2)
-    links = []
-    for row in ws.iter_rows(min_row=2, max_col=1):
-        cell = row[0]
-        target = cell.hyperlink.target if cell.hyperlink else ""
-        links.append(target)
-    links = links[:len(df)]  # garante alinhamento com o DataFrame
-    def extrair_pais(link):
-        if not link:
-            return None
-        try:
-            qs = parse_qs(urlparse(link).query)
-            if "league" in qs and qs["league"]:
-                # Retorna minúsculo, igual ao formato do paises.csv
-                return qs["league"][0].strip().lower()
-        except Exception:
-            pass
-        return None
-    df["País"] = [extrair_pais(l) for l in links]
-    # Filtra apenas os países elegíveis (se o paises.csv existir)
-    try:
-        paises_elegiveis = load_paises_elegiveis()
-        if paises_elegiveis:
-            df = df[df["País"].isin(paises_elegiveis)]
-    except Exception:
-        pass  # se não conseguir carregar o CSV, mostra tudo
-    return df
-
-def _normalizar_nome(nome):
-    """Padroniza nome de time de forma robusta.
-    - Colapsa todos os tipos de espaço (incluindo invisíveis)
-    - Remove apóstrofos e variações (O'Higgins -> OHiggins)
-    - Remove acentos, minúsculas, sem espaços duplos"""
-    if not isinstance(nome, str):
-        return ""
-    # 1) colapsa todos os tipos de espaço
-    n = re.sub(r"[\s\u00a0\u2000-\u200b\u202f\u205f\u3000]+", " ", nome)
-    # 2) remove apóstrofos e variações (reto, curvo, modificador, etc.)
-    n = re.sub(r"['\u2018\u2019\u02bc\u201b\u2032]", "", n)
-    # 3) remove acentos
-    n = unicodedata.normalize("NFD", n)
-    n = "".join(c for c in n if unicodedata.category(c) != "Mn")
-    # 4) minúsculas, sem espaços duplos
-    n = n.strip().lower()
-    n = " ".join(n.split())
-    return n
-
-
-SHEET_ID = "1WH5N3qLvzbw5Vxkpv7TK5-u6xEpCZrZ0q3HWni9uTSo"
-SHEET_GID = 1612712257  # aba "Jogos Futuros do PAINEL"
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def load_base_extra():
-    """Lê a base direto do Google Sheets. Cache em disco (evita refetch no restart)."""
-    return _cache_local("base_extra", _fetch_base_extra, ttl=21600)
-
-def _fetch_base_extra():
-    url = (
-        f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
-        f"/export?format=csv&gid={SHEET_GID}"
-    )
-    df = pd.read_csv(url)
-    base = pd.DataFrame({
-        "Nome Casa": df["Nome Casa"],
-        "Nome Fora": df["Nome Fora"],
-        "Classif Geral Casa": pd.to_numeric(df["Classif Geral Casa"], errors="coerce").fillna(0).astype(int),
-        "Classif Geral Fora": pd.to_numeric(df["Classif Geral Fora"], errors="coerce").fillna(0).astype(int),
-        "Odd Abertura Casa": pd.to_numeric(
-            df["Odd Abertura Casa"].astype(str).str.replace(",", ".").str.strip(),
-            errors="coerce",
-        ).fillna(0.0),
-        "Odd Abertura Visitante": pd.to_numeric(
-            df["Odd Abertura Visitante"].astype(str).str.replace(",", ".").str.strip(),
-            errors="coerce",
-        ).fillna(0.0),
-    })
-    # Coluna de DATA do jogo (nome confirmado: "Date")
-    base["Data"] = df["Date"] if "Date" in df.columns else pd.NaT
-    base["Casa_N"] = base["Nome Casa"].map(_normalizar_nome)
-    base["Fora_N"] = base["Nome Fora"].map(_normalizar_nome)
-    # Normaliza a data para YYYY-MM-DD (canônico) — casa com o lado dos jogos
-    base["Data_N"] = pd.to_datetime(base["Data"], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
-    base = base.drop_duplicates(subset=["Casa_N", "Fora_N", "Data_N"], keep="first")
-    return base
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def load_metodos_jogos():
-    """Retorna lista de dicts: data, pais, mandante, horario, visitante, metodos. Só cache em memória."""
-    return _fetch_metodos_jogos()
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def load_campeonatos():
-    """Aba Campeonatos (Sheets). Fallback: campeonatos.csv local."""
-    d = _get_gs("campeonatos")
+def _parse_campeonatos(d):
     if d and d.get("ok"):
-        campeonatos = set(str(c).strip() for c in d.get("campeonatos", []) if str(c).strip())
-        if campeonatos:
-            return sorted(campeonatos)
-    for path in [os.getenv("CAMPEONATOS_PATH", "Data/campeonatos.csv"),
-                 os.getenv("CAMPEONATOS_PATH", "data/campeonatos.csv")]:
-        if os.path.exists(path):
-            df = pd.read_csv(path, header=None)
-            col = df.columns[0]
-            return sorted(set(df[col].dropna().astype(str).str.strip().tolist()))
+        c = {str(x).strip() for x in d.get("campeonatos", []) if str(x).strip()}
+        if c:
+            return sorted(c)
+    p = caminho("CAMPEONATOS_PATH", "data/campeonatos.csv")
+    if os.path.exists(p):
+        s = pd.read_csv(p, header=None).iloc[:, 0]
+        return sorted(set(s.dropna().astype(str).str.strip()))
     return []
 
-def _fetch_metodos_jogos():
-    try:
-        r = requests.get(METODOS_URL, timeout=30)
-        dados = r.json().get("rows", [])
-        # Garante que seja SEMPRE uma lista de dicts (nunca DataFrame)
-        if isinstance(dados, pd.DataFrame):
-            dados = dados.to_dict("records")
-        if not isinstance(dados, list):
-            return []
-        return [dict(d) for d in dados if isinstance(d, dict)]
-    except Exception as e:
-        print(f"[aviso] _fetch_metodos_jogos: {e}")
-        return []
 
-def salvar_metodos(linhas):
-    """Grava os métodos em lote. O Apps Script responde 302 quando o doPost roda.
-    Seguir o redirect com POST causa 405 HTML — então tratamos o 302 como sucesso."""
-    try:
-        r = requests.post(METODOS_URL, json={"rows": linhas}, allow_redirects=False, timeout=30)
-        # 302/301 = doPost executou e gravou; não seguimos o redirect (evita o 405)
-        if r.status_code in (301, 302, 303, 307, 308):
-            return {"ok": True, "saved": len(linhas)}
-        # Se já vier JSON direto, usa
+def _parse_base_extra(df):
+    """Classificação e odds de abertura (aba 'Jogos Futuros do PAINEL')."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    def num(col):
+        return pd.to_numeric(df[col].astype(str).str.replace(",", ".").str.strip(), errors="coerce")
+
+    base = pd.DataFrame({
+        "Casa_N": df["Nome Casa"].map(_normalizar_nome),
+        "Fora_N": df["Nome Fora"].map(_normalizar_nome),
+        "Classif Casa": num("Classif Geral Casa").fillna(0).astype(int),
+        "Classif Fora": num("Classif Geral Fora").fillna(0).astype(int),
+        "Odd Casa": num("Odd Abertura Casa").fillna(0.0),
+        "Odd Fora": num("Odd Abertura Visitante").fillna(0.0),
+        "Data_N": pd.to_datetime(df["Date"], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
+        if "Date" in df.columns else None,
+    })
+    return base.drop_duplicates(subset=["Casa_N", "Fora_N", "Data_N"], keep="first").reset_index(drop=True)
+
+
+def load_metodos() -> pd.DataFrame:
+    return _referencias()["metodos_stats"]
+
+
+def load_paises_elegiveis() -> set:
+    return _referencias()["paises"]
+
+
+def load_depara() -> dict:
+    return _referencias()["depara"]
+
+
+def load_campeonatos() -> list:
+    return _referencias()["campeonatos"]
+
+
+def load_base_extra() -> pd.DataFrame:
+    return _referencias()["base_extra"]
+
+
+# ---------- Dados graváveis: store em memória atualizado localmente ----------
+@st.cache_resource
+def _store_metodos() -> dict:
+    return {"dados": None, "ts": 0.0}
+
+
+@st.cache_resource
+def _store_config() -> dict:
+    return {"dados": None, "ts": 0.0}
+
+
+def _parse_metodos_jogos(d) -> list[dict]:
+    rows = (d or {}).get("rows", []) if isinstance(d, dict) else []
+    return [dict(r) for r in rows if isinstance(r, dict)]
+
+
+def load_metodos_jogos() -> list[dict]:
+    """Métodos marcados por jogo (aba Métodos). Lista de dicts."""
+    s = _store_metodos()
+    if s["dados"] is None or time.time() - s["ts"] > TTL_GRAVAVEL:
+        s.update(dados=_parse_metodos_jogos(_get_gs()), ts=time.time())
+    return [dict(r) for r in s["dados"]]
+
+
+def _aplicar_local(linhas: list[dict], remover: bool):
+    s = _store_metodos()
+    if s["dados"] is None:
+        return
+    chaves = {chave_jogo(l.get("data"), l.get("pais"), l.get("mandante"), l.get("visitante")): l
+              for l in linhas}
+    atual = [r for r in s["dados"]
+             if chave_jogo(r.get("data"), r.get("pais"), r.get("mandante"), r.get("visitante")) not in chaves]
+    if not remover:
+        atual += [{**l, "data": norm_data(l.get("data"))} for l in chaves.values()]
+    s["dados"] = atual
+
+
+def salvar_metodos(linhas: list[dict]) -> dict:
+    resp = _post_gs({"rows": linhas})
+    if resp.get("ok"):
+        resp.setdefault("saved", len(linhas))
+        _aplicar_local(linhas, remover=False)
+    return resp
+
+
+def deletar_metodos(linhas: list[dict]) -> dict:
+    resp = _post_gs({"destino": "limpar", "linhas": linhas})
+    if resp.get("ok"):
+        resp.setdefault("saved", len(linhas))
+        _aplicar_local(linhas, remover=True)
+    return resp
+
+
+def _parse_config(d) -> dict:
+    cfg = {"stakes_manuais": {}}
+    if d and d.get("ok"):
+        for k, v in (d.get("config") or {}).items():
+            if k.startswith("stake_manual|"):
+                try:
+                    cfg["stakes_manuais"][k.split("|", 1)[1]] = float(v)
+                except (TypeError, ValueError):
+                    pass
+            else:
+                cfg[k] = v
+    elif os.path.exists(CONFIG_LOCAL):
+        import json
         try:
-            return r.json()
+            with open(CONFIG_LOCAL, encoding="utf-8") as f:
+                cfg.update(json.load(f))
         except Exception:
-            return {"ok": True, "saved": len(linhas)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-def deletar_metodos(linhas):
-    """Remove os jogos (linhas inteiras) da aba Métodos no Google Sheets."""
-    try:
-        r = requests.post(METODOS_URL, json={"destino": "limpar", "linhas": linhas},
-                          allow_redirects=False, timeout=30)
-        # 302/301 = doPost executou e removeu; não seguimos o redirect (evita o 405)
-        if r.status_code in (301, 302, 303, 307, 308):
-            return {"ok": True, "saved": len(linhas)}
-        # Se já vier JSON direto, usa
+            pass
+    for k, padrao in (("banca", 1000.0), ("dd", 10.0)):
         try:
-            return r.json()
+            cfg[k] = float(cfg.get(k, padrao))
+        except (TypeError, ValueError):
+            cfg[k] = padrao
+    cfg.setdefault("tipo_red", "Red Médio")
+    return cfg
+
+
+def load_config() -> dict:
+    s = _store_config()
+    if s["dados"] is None or time.time() - s["ts"] > TTL_GRAVAVEL:
+        s.update(dados=_parse_config(_get_gs("config")), ts=time.time())
+    return {**s["dados"], "stakes_manuais": dict(s["dados"].get("stakes_manuais", {}))}
+
+
+def salvar_config(cfg: dict) -> bool:
+    """Grava banca/dd/tipo_red/stakes manuais na aba Config. Fallback: json local."""
+    payload = {"banca": cfg.get("banca", 1000.0), "dd": cfg.get("dd", 10.0),
+               "tipo_red": cfg.get("tipo_red", "Red Médio")}
+    for nome, valor in (cfg.get("stakes_manuais") or {}).items():
+        payload[f"stake_manual|{nome}"] = valor
+    ok = _post_gs({"destino": "config", "config": payload}).get("ok")
+    if not ok:
+        import json
+        try:
+            os.makedirs(os.path.dirname(CONFIG_LOCAL), exist_ok=True)
+            with open(CONFIG_LOCAL, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            ok = True
         except Exception:
-            return {"ok": True, "saved": len(linhas)}
-    except Exception as e:
-        return {"ok": False, "erro": str(e)}
+            return False
+    _store_config().update(dados=dict(cfg), ts=time.time())
+    return True
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
-os.makedirs(CACHE_DIR, exist_ok=True)
 
-def _cache_local(nome, funcao, ttl=21600):
-    """Lê de um cache em disco; se estiver velho, refaz a rede e regrava."""
-    path = os.path.join(CACHE_DIR, nome + ".pkl")
-    if os.path.exists(path):
-        idade = time.time() - os.path.getmtime(path)
-        if idade < ttl:
-            try:
-                with open(path, "rb") as f:
-                    return pickle.load(f)
-            except Exception:
-                pass  # arquivo corrompido -> refaz a rede
-    dado = funcao()
+# ============================================================
+# MANUTENÇÃO
+# ============================================================
+def limpar_caches():
+    """Zera cache em memória, stores e cache em disco (botão 'Limpar Cache')."""
+    import shutil
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    shutil.rmtree(CACHE_DIR, ignore_errors=True)
+
+
+def push_github() -> tuple[bool, str]:
+    """Commit + push das duas bases (Trading Esportivo + lista de jogos), se mudaram."""
     try:
-        with open(path, "wb") as f:
-            pickle.dump(dado, f)
+        arquivos = [os.path.relpath(p, BASE_DIR) for p in (DATA_PATH, LISTA_JOGOS_PATH) if os.path.exists(p)]
+        subprocess.run(["git", "add", "--", *arquivos], cwd=BASE_DIR,
+                       capture_output=True, text=True, check=True)
+        r = subprocess.run(["git", "commit", "-m", "Atualiza bases do dashboard (Trading Esportivo + lista de jogos)"],
+                           cwd=BASE_DIR, capture_output=True, text=True)
+        if r.returncode != 0:
+            return True, "Nada novo para enviar."
+        subprocess.run(["git", "push"], cwd=BASE_DIR, capture_output=True, text=True, check=True)
+        return True, "Excel e lista de jogos enviados para o GitHub!"
+    except subprocess.CalledProcessError as e:
+        return False, (e.stderr or str(e)).strip()
     except Exception as e:
-        print(f"[aviso] _cache_local({nome}): {e}")
-    return dado
+        return False, str(e)
